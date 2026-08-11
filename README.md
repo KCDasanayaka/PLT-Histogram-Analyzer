@@ -1,85 +1,145 @@
+# 📈 PLT Histogram Analyzer
+
+A deep-learning-based application for analyzing PLT histogram
+graphs and detecting where the graph curve reaches a fixed
+50% of the plotting height.
+
+The application uses a trained U-Net segmentation model to
+identify the PLT histogram curve and deterministic geometry
+to calculate intersection positions.
+
 ---
-title: PLT Histogram Analyzer
-emoji: 📈
-colorFrom: blue
-colorTo: indigo
-sdk: gradio
-app_file: app.py
-pinned: false
+
+## Live Application
+
+This project is designed to run using
+**Streamlit Community Cloud**.
+
+The application allows users to:
+
+1. Upload a cropped PLT histogram graph.
+2. Detect the histogram curve.
+3. Locate the fixed 50% graph-height level.
+4. Detect all genuine curve intersections.
+5. Calculate X-axis intersection values in fL.
+6. Calculate the width when two or more intersections exist.
+
 ---
-
-# PLT Histogram Analyzer
-
-A deep-learning-based PLT histogram curve analysis system.
-
-The application detects the PLT histogram curve and identifies
-the X-axis locations where the curve reaches a fixed 50% of the
-graph plotting height.
-
-## Features
-
-- PLT curve segmentation using a trained U-Net
-- Fixed 50% graph-height measurement
-- Automatic graph boundary detection
-- Detection of multiple 50% intersections
-- X-coordinate conversion to fL
-- Width calculation when two or more intersections exist
-- Support for 0–40 fL and 0–30 fL graphs
-- Visual annotated output
-- JSON result output
 
 ## Measurement Logic
 
-The vertical plotting region is interpreted as:
+The vertical plotting area is interpreted as:
 
 ```text
-100% ───────────────────────── Graph top
+100% ───────────────────────── Graph Top
  |
  |
- 50% ───────────────────────── Fixed measurement level
+ 50% ───────────────────────── Fixed Measurement Level
  |
  |
- 0%  ───────────────────────── X-axis baseline
+ 0%  ───────────────────────── X-axis Baseline
 ```
 
-The 50% measurement level does not depend on the highest point
-of the detected curve.
+The 50% level is based on the plotting area.
 
-### No intersection
+It does **not** depend on the maximum height of the detected
+curve.
 
-If the curve never reaches the fixed 50% level:
+---
+
+## Result Logic
+
+### No Intersection
+
+If the curve does not reach the fixed 50% level:
 
 ```text
 Status: no_intersection
+Intersections: 0
 Width: Not available
 ```
 
-### One intersection
+---
 
-If the curve crosses the fixed 50% level only once:
+### One Intersection
+
+If the curve reaches the fixed 50% level only once:
 
 ```text
 Status: single_intersection
+Intersections: 1
 Width: Not available
 ```
 
-### Two intersections
+---
 
-If two intersections are detected:
+### Two Intersections
+
+If two intersections exist:
 
 ```text
-Width = Right Intersection - Left Intersection
+Width =
+Maximum X Intersection
+-
+Minimum X Intersection
 ```
 
-### More than two intersections
+---
 
-Every genuine intersection is reported.
+### More Than Two Intersections
+
+All genuine intersections are returned.
+
+For example:
+
+```text
+Point 1 = 5.32 fL
+Point 2 = 11.47 fL
+Point 3 = 29.84 fL
+```
 
 The final width is:
 
 ```text
-Width = Maximum X Intersection - Minimum X Intersection
+29.84 - 5.32
+=
+24.52 fL
 ```
+
+Therefore:
+
+```text
+Width =
+Maximum Intersection
+-
+Minimum Intersection
+```
+
+---
+
+## Model
+
+The application uses a U-Net-based semantic segmentation
+network trained to identify the PLT histogram curve.
+
+The trained model checkpoint is:
+
+```text
+models/plt_curve_unet_fixed50_best.pt
+```
+
+The neural network is responsible for curve segmentation.
+
+The following operations are performed using deterministic
+geometry:
+
+- Graph boundary detection
+- Fixed 50% level calculation
+- Intersection detection
+- X-coordinate conversion
+- Width calculation
+
+---
 
 ## Project Structure
 
@@ -97,74 +157,215 @@ PLT-Histogram-Analyzer/
     └── plt_curve_unet_fixed50_best.pt
 ```
 
-## Model
+---
 
-The application uses a U-Net segmentation model trained to
-separate the actual PLT histogram curve from graph axes,
-reference lines, text and background noise.
+## Technologies
 
-The trained checkpoint is stored at:
+- Python
+- PyTorch
+- Streamlit
+- OpenCV
+- NumPy
+- Pandas
+- SciPy
+- Pillow
 
-```text
-models/plt_curve_unet_fixed50_best.pt
+---
+
+## Run Locally
+
+Clone the repository:
+
+```bash
+git clone YOUR_GITHUB_REPOSITORY_URL
 ```
 
-## Running Locally
+Move into the project:
 
-Install dependencies:
+```bash
+cd PLT-Histogram-Analyzer
+```
+
+Install the dependencies:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Run the application:
+Run the Streamlit application:
 
 ```bash
-python app.py
+streamlit run app.py
 ```
 
-Open the local Gradio URL shown in the terminal.
+The application should open in your browser.
 
-## Hugging Face Spaces
+Usually the local address is:
 
-This repository can be deployed directly as a Gradio
-Hugging Face Space.
+```text
+http://localhost:8501
+```
 
-Upload all project files and the trained checkpoint.
+---
 
-The Space will automatically build the environment and start
-`app.py`.
+## Streamlit Community Cloud Deployment
 
-## Input
+The application can be deployed directly from GitHub.
 
-Upload only the cropped PLT histogram region.
+### Step 1
 
-For the best results:
+Push the complete project to GitHub.
 
-- Keep the X-axis visible.
-- Keep the Y-axis visible.
-- Keep the complete graph region.
-- Avoid cropping through the graph boundaries.
-- Use the clearest available scan or screenshot.
+Make sure the repository contains:
+
+```text
+app.py
+model.py
+analyzer.py
+preprocessing.py
+requirements.txt
+models/plt_curve_unet_fixed50_best.pt
+```
+
+### Step 2
+
+Open Streamlit Community Cloud.
+
+Sign in using your GitHub account.
+
+### Step 3
+
+Choose:
+
+```text
+Create app
+```
+
+Select the GitHub repository containing this project.
+
+### Step 4
+
+Set the main file path to:
+
+```text
+app.py
+```
+
+### Step 5
+
+Deploy the application.
+
+Streamlit will install the packages listed in:
+
+```text
+requirements.txt
+```
+
+and start the application automatically.
+
+---
+
+## Input Requirements
+
+For better results, upload only the cropped PLT histogram
+area.
+
+The graph should preferably contain:
+
+- Complete X-axis
+- Complete Y-axis
+- Full histogram curve
+- Clear graph boundaries
+- Minimal surrounding report text
+
+Supported image formats include:
+
+```text
+PNG
+JPG
+JPEG
+WEBP
+```
+
+---
+
+## X-Axis Range
+
+The application currently supports:
+
+```text
+0–40 fL
+```
+
+and
+
+```text
+0–30 fL
+```
+
+The correct range should be selected before analysis.
+
+---
+
+## Curve Detection Sensitivity
+
+The Curve Detection Sensitivity controls the minimum
+segmentation probability accepted as part of the curve.
+
+Lower values:
+
+```text
+Detect faint lines
++
+May detect additional noise
+```
+
+Higher values:
+
+```text
+Detect clearer curve pixels
++
+May miss very faint parts
+```
+
+The default value is loaded from the trained model
+checkpoint.
+
+---
 
 ## Output
 
-The application returns:
+The application provides:
 
-- Detection status
+- Analysis status
+- Annotated histogram
 - Fixed 50% line
 - Number of intersections
-- All X intersection values
-- Minimum X
-- Maximum X
+- Individual X intersection values
+- Minimum intersection
+- Maximum intersection
 - Width at 50%
-- Annotated graph
-- Detailed JSON output
+- Curve support information
+- Detailed JSON result
+
+---
+
+## Model Loading
+
+The trained PyTorch model is loaded using Streamlit's
+resource caching.
+
+This means the model is loaded when the application starts
+and reused for subsequent predictions.
+
+The model is **not retrained** when a user uploads a graph.
+
+---
 
 ## Disclaimer
 
-This application is a research prototype intended for
-graph-analysis experiments.
+This project is a research prototype developed for automated
+PLT histogram graph analysis.
 
-It is not intended to provide medical diagnosis,
-treatment recommendations, or clinical decisions.
+It is not intended to provide medical diagnosis, treatment
+recommendations, or clinical decisions.
