@@ -14,6 +14,30 @@ from preprocessing import (
 )
 
 
+# ============================================================
+# MEASUREMENT SETTINGS
+# ============================================================
+
+# The curve peak must reach at least this percentage
+# of the complete plotting height before half-peak
+# measurement is allowed.
+#
+# 0.50 = peak must reach at least 50% of graph height.
+MIN_PEAK_HEIGHT_RATIO = 0.50
+
+# Used for detecting a curve that touches the
+# half-peak line without clearly crossing through it.
+TANGENT_TOLERANCE_PIXELS = 1.25
+
+# Crossings closer than this are treated as
+# the same intersection.
+MERGE_DISTANCE_PIXELS = 2.5
+
+
+# ============================================================
+# BASIC UTILITIES
+# ============================================================
+
 def interpolate_crossing(
     x1,
     y1,
@@ -22,20 +46,11 @@ def interpolate_crossing(
     target_y,
 ):
 
-    denominator = (
-        y2 - y1
-    )
+    denominator = y2 - y1
 
-    if (
-        abs(
-            denominator
-        ) < 1e-8
-    ):
-
+    if abs(denominator) < 1e-8:
         return float(
-            (
-                x1 + x2
-            ) / 2.0
+            (x1 + x2) / 2.0
         )
 
     fraction = (
@@ -53,15 +68,13 @@ def interpolate_crossing(
     return float(
         x1
         + fraction
-        * (
-            x2 - x1
-        )
+        * (x2 - x1)
     )
 
 
 def merge_close_values(
     values,
-    minimum_distance=2.5,
+    minimum_distance=MERGE_DISTANCE_PIXELS,
 ):
 
     if not values:
@@ -69,14 +82,11 @@ def merge_close_values(
 
     values = sorted(
         float(value)
-        for value
-        in values
+        for value in values
     )
 
     groups = [
-        [
-            values[0]
-        ]
+        [values[0]]
     ]
 
     for value in values[1:]:
@@ -101,15 +111,64 @@ def merge_close_values(
         float(
             np.mean(group)
         )
-        for group
-        in groups
+        for group in groups
     ]
 
 
-def detect_fixed_50_crossings(
+def pixel_to_fl(
+    x_pixel,
+    x_left,
+    x_right,
+    x_min_fl,
+    x_max_fl,
+):
+
+    denominator = max(
+        float(
+            x_right - x_left
+        ),
+        1.0,
+    )
+
+    normalized_position = (
+        float(x_pixel)
+        - float(x_left)
+    ) / denominator
+
+    normalized_position = float(
+        np.clip(
+            normalized_position,
+            0.0,
+            1.0,
+        )
+    )
+
+    return float(
+        x_min_fl
+        + normalized_position
+        * (
+            x_max_fl
+            - x_min_fl
+        )
+    )
+
+
+def format_fl(value):
+
+    if value is None:
+        return "Not available"
+
+    return f"{float(value):.3f} fL"
+
+
+# ============================================================
+# CURVE PEAK + 50% OF CURVE
+# ============================================================
+
+def calculate_curve_peak(
     trace_result,
     plot_bounds,
-    tangent_tolerance_pixels=1.25,
+    minimum_peak_height_ratio=MIN_PEAK_HEIGHT_RATIO,
 ):
 
     if not trace_result.get(
@@ -118,14 +177,250 @@ def detect_fixed_50_crossings(
     ):
 
         return {
-            "valid":
-                False,
+            "valid": False,
+            "reason": "curve_trace_invalid",
+            "peak_is_high_enough": False,
+            "curve_half_y": None,
+        }
+
+    y_values = np.asarray(
+        trace_result["y"],
+        dtype=np.float32,
+    )
+
+    x_values = np.asarray(
+        trace_result["x"],
+        dtype=np.float32,
+    )
+
+    finite_mask = np.isfinite(
+        y_values
+    )
+
+    if finite_mask.sum() < 5:
+
+        return {
+            "valid": False,
+            "reason": "insufficient_curve_points",
+            "peak_is_high_enough": False,
+            "curve_half_y": None,
+        }
+
+    baseline_y = float(
+        plot_bounds[
+            "baseline_y"
+        ]
+    )
+
+    y_top = float(
+        plot_bounds[
+            "y_top"
+        ]
+    )
+
+    plot_height = (
+        baseline_y - y_top
+    )
+
+    if plot_height <= 5:
+
+        return {
+            "valid": False,
+            "reason": "invalid_plot_height",
+            "peak_is_high_enough": False,
+            "curve_half_y": None,
+        }
+
+    # --------------------------------------------------------
+    # Find highest point of the detected curve.
+    #
+    # Image Y coordinates decrease as the graph gets higher,
+    # therefore the smallest Y value is the curve peak.
+    # --------------------------------------------------------
+
+    finite_indexes = np.where(
+        finite_mask
+    )[0]
+
+    finite_y_values = (
+        y_values[
+            finite_indexes
+        ]
+    )
+
+    peak_local_index = int(
+        np.argmin(
+            finite_y_values
+        )
+    )
+
+    peak_index = int(
+        finite_indexes[
+            peak_local_index
+        ]
+    )
+
+    peak_y = float(
+        y_values[
+            peak_index
+        ]
+    )
+
+    peak_x = float(
+        x_values[
+            peak_index
+        ]
+    )
+
+    # Height of the actual curve above baseline.
+    peak_height_pixels = (
+        baseline_y - peak_y
+    )
+
+    peak_height_pixels = max(
+        0.0,
+        peak_height_pixels,
+    )
+
+    # How high is the curve compared with the
+    # entire Y-axis plotting height?
+    peak_height_ratio = (
+        peak_height_pixels
+        / plot_height
+    )
+
+    peak_height_ratio = float(
+        np.clip(
+            peak_height_ratio,
+            0.0,
+            1.5,
+        )
+    )
+
+    peak_is_high_enough = (
+        peak_height_ratio
+        >= minimum_peak_height_ratio
+    )
+
+    # --------------------------------------------------------
+    # Important:
+    #
+    # Do NOT calculate curve-half level when the
+    # distribution is too low.
+    # --------------------------------------------------------
+
+    if not peak_is_high_enough:
+
+        return {
+            "valid": True,
 
             "reason":
-                "insufficient_curve_support",
+                "peak_too_low",
 
-            "crossings_px":
-                [],
+            "peak_is_high_enough":
+                False,
+
+            "peak_x":
+                peak_x,
+
+            "peak_y":
+                peak_y,
+
+            "peak_height_pixels":
+                peak_height_pixels,
+
+            "peak_height_ratio":
+                peak_height_ratio,
+
+            "plot_height_pixels":
+                plot_height,
+
+            "curve_half_y":
+                None,
+        }
+
+    # --------------------------------------------------------
+    # 50% OF THE CURVE PEAK
+    #
+    # baseline = 0%
+    # curve peak = 100% of this distribution
+    #
+    # Half-peak is halfway between baseline
+    # and the detected curve peak.
+    # --------------------------------------------------------
+
+    curve_half_height = (
+        peak_height_pixels
+        * 0.50
+    )
+
+    curve_half_y = (
+        baseline_y
+        - curve_half_height
+    )
+
+    return {
+        "valid":
+            True,
+
+        "reason":
+            None,
+
+        "peak_is_high_enough":
+            True,
+
+        "peak_x":
+            peak_x,
+
+        "peak_y":
+            peak_y,
+
+        "peak_height_pixels":
+            peak_height_pixels,
+
+        "peak_height_ratio":
+            peak_height_ratio,
+
+        "plot_height_pixels":
+            plot_height,
+
+        "curve_half_height_pixels":
+            curve_half_height,
+
+        "curve_half_y":
+            float(
+                curve_half_y
+            ),
+    }
+
+
+# ============================================================
+# FIND ALL GENUINE HALF-PEAK INTERSECTIONS
+# ============================================================
+
+def detect_curve_half_crossings(
+    trace_result,
+    curve_half_y,
+    tangent_tolerance_pixels=TANGENT_TOLERANCE_PIXELS,
+):
+
+    if not trace_result.get(
+        "valid",
+        False,
+    ):
+
+        return {
+            "valid": False,
+            "reason": "invalid_curve_trace",
+            "crossings_px": [],
+        }
+
+    if curve_half_y is None:
+
+        return {
+            "valid": False,
+            "reason": "half_level_not_available",
+            "crossings_px": [],
         }
 
     x_values = np.asarray(
@@ -138,13 +433,7 @@ def detect_fixed_50_crossings(
         dtype=np.float32,
     )
 
-    target_y = float(
-        plot_bounds[
-            "fixed_y50"
-        ]
-    )
-
-    finite = np.isfinite(
+    finite_mask = np.isfinite(
         y_values
     )
 
@@ -152,34 +441,41 @@ def detect_fixed_50_crossings(
 
     continuous_segments = (
         find_true_runs(
-            finite
+            finite_mask
         )
     )
 
-    for start, end in (
+    for segment_start, segment_end in (
         continuous_segments
     ):
 
-        if (
-            end - start + 1
-            < 4
-        ):
+        segment_length = (
+            segment_end
+            - segment_start
+            + 1
+        )
+
+        if segment_length < 4:
             continue
 
         segment_x = x_values[
-            start:
-            end + 1
+            segment_start:
+            segment_end + 1
         ]
 
         segment_y = y_values[
-            start:
-            end + 1
+            segment_start:
+            segment_end + 1
         ]
 
         differences = (
             segment_y
-            - target_y
+            - curve_half_y
         )
+
+        # ----------------------------------------------------
+        # Normal crossings
+        # ----------------------------------------------------
 
         for index in range(
             len(segment_x) - 1
@@ -221,15 +517,17 @@ def detect_fixed_50_crossings(
                 ]
             )
 
+            # Curve genuinely moves from one
+            # side of half-level to the other.
             if d1 * d2 < 0:
 
                 crossing = (
                     interpolate_crossing(
-                        x1,
-                        y1,
-                        x2,
-                        y2,
-                        target_y,
+                        x1=x1,
+                        y1=y1,
+                        x2=x2,
+                        y2=y2,
+                        target_y=curve_half_y,
                     )
                 )
 
@@ -237,13 +535,18 @@ def detect_fixed_50_crossings(
                     crossing
                 )
 
-        # Detect a curve that touches
-        # the fixed 50% line without
-        # actually crossing through it.
-        absolute_difference = (
-            np.abs(
-                differences
-            )
+        # ----------------------------------------------------
+        # Tangency / touching detection
+        #
+        # Example:
+        #
+        # curve approaches 50%
+        # touches it
+        # then moves back to same side.
+        # ----------------------------------------------------
+
+        absolute_difference = np.abs(
+            differences
         )
 
         for index in range(
@@ -251,84 +554,75 @@ def detect_fixed_50_crossings(
             len(segment_x) - 1,
         ):
 
-            if (
+            current_distance = float(
                 absolute_difference[
                     index
                 ]
-                <= tangent_tolerance_pixels
+            )
+
+            if (
+                current_distance
+                > tangent_tolerance_pixels
+            ):
+                continue
+
+            previous_distance = float(
+                absolute_difference[
+                    index - 1
+                ]
+            )
+
+            next_distance = float(
+                absolute_difference[
+                    index + 1
+                ]
+            )
+
+            previous_sign = float(
+                differences[
+                    index - 1
+                ]
+            )
+
+            next_sign = float(
+                differences[
+                    index + 1
+                ]
+            )
+
+            same_side = (
+                previous_sign
+                * next_sign
+                > 0
+            )
+
+            local_minimum = (
+                current_distance
+                <= previous_distance
+                and
+                current_distance
+                <= next_distance
+            )
+
+            if (
+                same_side
+                and local_minimum
             ):
 
-                left_difference = (
-                    absolute_difference[
-                        index - 1
-                    ]
-                )
-
-                right_difference = (
-                    absolute_difference[
-                        index + 1
-                    ]
-                )
-
-                same_side = (
-                    differences[
-                        index - 1
-                    ]
-                    * differences[
-                        index + 1
-                    ]
-                    > 0
-                )
-
-                local_minimum = (
-                    absolute_difference[
-                        index
-                    ]
-                    <= left_difference
-                    and
-                    absolute_difference[
-                        index
-                    ]
-                    <= right_difference
-                )
-
-                if (
-                    same_side
-                    and local_minimum
-                ):
-
-                    crossings.append(
-                        float(
-                            segment_x[
-                                index
-                            ]
-                        )
+                crossings.append(
+                    float(
+                        segment_x[
+                            index
+                        ]
                     )
+                )
 
-    crossings = (
-        merge_close_values(
-            crossings,
-            minimum_distance=2.5,
-        )
+    crossings = merge_close_values(
+        crossings,
+        minimum_distance=(
+            MERGE_DISTANCE_PIXELS
+        ),
     )
-
-    if len(crossings) == 0:
-
-        status = (
-            "no_intersection"
-        )
-
-    elif len(crossings) == 1:
-
-        status = (
-            "single_intersection"
-        )
-
-    else:
-
-        status = (
-            "measure_width"
-        )
 
     return {
         "valid":
@@ -338,89 +632,71 @@ def detect_fixed_50_crossings(
             None,
 
         "crossings_px":
-            crossings,
-
-        "status":
-            status,
-
-        "fixed_y50":
-            target_y,
+            sorted(
+                crossings
+            ),
     }
 
 
-def pixel_to_fl(
-    x_pixel,
-    x_left,
-    x_right,
-    x_min_fl,
-    x_max_fl,
-):
+# ============================================================
+# RESULT TABLE
+# ============================================================
 
-    denominator = max(
-        float(
-            x_right
-            - x_left
-        ),
-        1.0,
+def make_result_table(result):
+
+    peak_ratio = result.get(
+        "peak_height_ratio"
     )
 
-    normalized = (
-        float(x_pixel)
-        - float(x_left)
-    ) / denominator
+    if peak_ratio is None:
 
-    normalized = float(
-        np.clip(
-            normalized,
-            0.0,
-            1.0,
+        peak_display = (
+            "Not available"
         )
-    )
 
-    return float(
-        x_min_fl
-        + normalized
-        * (
-            x_max_fl
-            - x_min_fl
+    else:
+
+        peak_display = (
+            f"{peak_ratio * 100:.1f}% "
+            "of graph height"
         )
-    )
-
-
-def format_fl(
-    value,
-):
-
-    if value is None:
-        return "Not available"
-
-    return (
-        f"{float(value):.3f} fL"
-    )
-
-
-def make_result_table(
-    result,
-):
 
     rows = [
         [
             "Status",
-            result["status"],
+            result[
+                "status"
+            ],
         ],
 
         [
             "Measurement",
-            "Fixed 50% of graph height",
+            (
+                "50% of detected "
+                "curve peak"
+            ),
+        ],
+
+        [
+            "Minimum peak requirement",
+            (
+                f"{result['minimum_peak_height_ratio'] * 100:.0f}% "
+                "of graph height"
+            ),
+        ],
+
+        [
+            "Detected peak height",
+            peak_display,
         ],
 
         [
             "X-axis range",
             (
-                f'{result["x_min_fl"]:.0f}'
-                f'–'
-                f'{result["x_max_fl"]:.0f}'
-                f' fL'
+                f"{result['x_min_fl']:.0f}"
+                f"–"
+                f"{result['x_max_fl']:.0f}"
+                " fL"
             ),
         ],
 
@@ -471,13 +747,23 @@ def make_result_table(
         [
             "Curve support",
             (
-                f'{result["curve_support"]:.1f}%'
+                f"{result['curve_support']:.1f}%"
+            ),
+        ],
+
+        [
+            "Reason",
+            result.get(
+                "reason",
+                "None",
             ),
         ],
 
         [
             "Warning",
-            result["warning"],
+            result[
+                "warning"
+            ],
         ],
     ]
 
@@ -490,14 +776,20 @@ def make_result_table(
     )
 
 
+# ============================================================
+# ANNOTATION
+# ============================================================
+
 def annotate_result(
     image_rgb,
     probability_mask,
     plot_bounds,
     crossings_px,
     crossings_fl,
+    curve_half_y,
     width_50_fl,
     status,
+    reason,
     segmentation_threshold,
 ):
 
@@ -510,8 +802,10 @@ def annotate_result(
         annotated.shape[:2]
     )
 
-    # Light visualization of
-    # segmentation result.
+    # --------------------------------------------------------
+    # Green overlay = model's detected curve
+    # --------------------------------------------------------
+
     overlay = annotated.copy()
 
     curve_mask = (
@@ -547,191 +841,166 @@ def annotate_result(
         ]
     )
 
-    y_top = int(
-        plot_bounds[
-            "y_top"
-        ]
-    )
-
     baseline_y = int(
         plot_bounds[
             "baseline_y"
         ]
     )
 
-    y50 = int(
-        round(
-            plot_bounds[
-                "fixed_y50"
-            ]
-        )
-    )
+    # --------------------------------------------------------
+    # Draw half-peak line ONLY when measurement
+    # is actually allowed.
+    # --------------------------------------------------------
 
-    # Detected Y-axis.
-    cv2.line(
-        annotated,
-        (
-            x_left,
-            y_top,
-        ),
-        (
-            x_left,
-            baseline_y,
-        ),
-        (
-            255,
-            90,
-            0,
-        ),
-        1,
-        cv2.LINE_AA,
-    )
+    if curve_half_y is not None:
 
-    # Detected X-axis.
-    cv2.line(
-        annotated,
-        (
-            x_left,
-            baseline_y,
-        ),
-        (
-            x_right,
-            baseline_y,
-        ),
-        (
-            255,
-            90,
-            0,
-        ),
-        1,
-        cv2.LINE_AA,
-    )
-
-    # Fixed 50% line.
-    cv2.line(
-        annotated,
-        (
-            x_left,
-            y50,
-        ),
-        (
-            x_right,
-            y50,
-        ),
-        (
-            0,
-            165,
-            255,
-        ),
-        1,
-        cv2.LINE_AA,
-    )
-
-    cv2.putText(
-        annotated,
-        "Fixed 50%",
-        (
-            min(
-                width - 70,
-                x_left + 3,
-            ),
-            max(
-                13,
-                y50 - 5,
-            ),
-        ),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.36,
-        (
-            0,
-            120,
-            220,
-        ),
-        1,
-        cv2.LINE_AA,
-    )
-
-    for index, (
-        x_pixel,
-        x_value_fl,
-    ) in enumerate(
-        zip(
-            crossings_px,
-            crossings_fl,
-        )
-    ):
-
-        x_point = int(
+        half_y = int(
             round(
-                x_pixel
+                curve_half_y
             )
         )
 
-        cv2.circle(
+        cv2.line(
             annotated,
             (
-                x_point,
-                y50,
+                x_left,
+                half_y,
             ),
-            4,
+            (
+                x_right,
+                half_y,
+            ),
             (
                 0,
-                0,
+                165,
                 255,
-            ),
-            -1,
-            cv2.LINE_AA,
-        )
-
-        text_y = (
-            y50 - 8
-            if index % 2 == 0
-            else y50 + 17
-        )
-
-        cv2.putText(
-            annotated,
-            (
-                f"{x_value_fl:.2f}"
-                " fL"
-            ),
-            (
-                max(
-                    1,
-                    min(
-                        width - 68,
-                        x_point - 20,
-                    ),
-                ),
-                max(
-                    12,
-                    min(
-                        height - 4,
-                        text_y,
-                    ),
-                ),
-            ),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.33,
-            (
-                0,
-                0,
-                215,
             ),
             1,
             cv2.LINE_AA,
         )
 
-    summary = (
-        f"Status: {status}"
-    )
-
-    if width_50_fl is not None:
-
-        summary += (
-            f" | Width: "
-            f"{width_50_fl:.2f} fL"
+        cv2.putText(
+            annotated,
+            "50% Curve",
+            (
+                min(
+                    width - 80,
+                    x_left + 4,
+                ),
+                max(
+                    13,
+                    half_y - 5,
+                ),
+            ),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.36,
+            (
+                0,
+                120,
+                220,
+            ),
+            1,
+            cv2.LINE_AA,
         )
+
+        # ----------------------------------------------------
+        # Draw every genuine intersection
+        # ----------------------------------------------------
+
+        for index, (
+            x_pixel,
+            x_value_fl,
+        ) in enumerate(
+            zip(
+                crossings_px,
+                crossings_fl,
+            )
+        ):
+
+            x_point = int(
+                round(
+                    x_pixel
+                )
+            )
+
+            cv2.circle(
+                annotated,
+                (
+                    x_point,
+                    half_y,
+                ),
+                4,
+                (
+                    0,
+                    0,
+                    255,
+                ),
+                -1,
+                cv2.LINE_AA,
+            )
+
+            text_y = (
+                half_y - 8
+                if index % 2 == 0
+                else half_y + 17
+            )
+
+            cv2.putText(
+                annotated,
+                (
+                    f"{x_value_fl:.2f}"
+                    " fL"
+                ),
+                (
+                    max(
+                        1,
+                        min(
+                            width - 68,
+                            x_point - 20,
+                        ),
+                    ),
+                    max(
+                        12,
+                        min(
+                            height - 4,
+                            text_y,
+                        ),
+                    ),
+                ),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.33,
+                (
+                    0,
+                    0,
+                    215,
+                ),
+                1,
+                cv2.LINE_AA,
+            )
+
+    # --------------------------------------------------------
+    # Header
+    # --------------------------------------------------------
+
+    if reason == "peak_too_low":
+
+        summary = (
+            "Status: no_intersection "
+            "| Distribution too low"
+        )
+
+    else:
+
+        summary = (
+            f"Status: {status}"
+        )
+
+        if width_50_fl is not None:
+
+            summary += (
+                f" | W50: "
+                f"{width_50_fl:.2f} fL"
+            )
 
     cv2.rectangle(
         annotated,
@@ -740,8 +1009,8 @@ def annotate_result(
             min(
                 width - 1,
                 max(
-                    220,
-                    len(summary) * 7,
+                    225,
+                    len(summary) * 6,
                 ),
             ),
             21,
@@ -757,9 +1026,12 @@ def annotate_result(
     cv2.putText(
         annotated,
         summary,
-        (4, 14),
+        (
+            4,
+            14,
+        ),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.37,
+        0.36,
         (
             20,
             20,
@@ -777,6 +1049,10 @@ def annotate_result(
     )
 
 
+# ============================================================
+# MAIN ANALYSIS FUNCTION
+# ============================================================
+
 @torch.inference_mode()
 def analyze_plt_graph(
     input_image,
@@ -786,6 +1062,10 @@ def analyze_plt_graph(
     segmentation_threshold=0.35,
 ):
 
+    # --------------------------------------------------------
+    # 1. Prepare image
+    # --------------------------------------------------------
+
     (
         original_image,
         image_tensor,
@@ -794,6 +1074,10 @@ def analyze_plt_graph(
         input_image,
         device,
     )
+
+    # --------------------------------------------------------
+    # 2. Segment the PLT curve
+    # --------------------------------------------------------
 
     logits = model(
         image_tensor
@@ -816,11 +1100,19 @@ def analyze_plt_graph(
         )
     )
 
+    # --------------------------------------------------------
+    # 3. Detect graph boundaries
+    # --------------------------------------------------------
+
     plot_bounds = (
         detect_plot_bounds(
             original_image
         )
     )
+
+    # --------------------------------------------------------
+    # 4. Trace actual curve
+    # --------------------------------------------------------
 
     trace_result = (
         trace_curve_centerline(
@@ -832,23 +1124,73 @@ def analyze_plt_graph(
         )
     )
 
-    crossing_result = (
-        detect_fixed_50_crossings(
+    # --------------------------------------------------------
+    # 5. Find actual curve peak
+    # --------------------------------------------------------
+
+    peak_result = (
+        calculate_curve_peak(
             trace_result,
             plot_bounds,
+            minimum_peak_height_ratio=(
+                MIN_PEAK_HEIGHT_RATIO
+            ),
         )
     )
 
     x_min_fl = 0.0
-
     x_max_fl = float(
         x_axis_max_fl
     )
 
-    if crossing_result.get(
+    crossings_px = []
+    crossings_fl = []
+
+    reason = peak_result.get(
+        "reason"
+    )
+
+    curve_half_y = peak_result.get(
+        "curve_half_y"
+    )
+
+    # --------------------------------------------------------
+    # 6. Decide whether half-peak analysis is allowed
+    # --------------------------------------------------------
+
+    if not peak_result.get(
         "valid",
         False,
     ):
+
+        status = "reject"
+
+    elif not peak_result.get(
+        "peak_is_high_enough",
+        False,
+    ):
+
+        # IMPORTANT:
+        #
+        # Low graph like your example:
+        # no 50% line
+        # no points
+        # no width
+        status = (
+            "no_intersection"
+        )
+
+        crossings_px = []
+        crossings_fl = []
+
+    else:
+
+        crossing_result = (
+            detect_curve_half_crossings(
+                trace_result,
+                curve_half_y,
+            )
+        )
 
         crossings_px = (
             crossing_result.get(
@@ -857,84 +1199,87 @@ def analyze_plt_graph(
             )
         )
 
-    else:
+        crossings_fl = [
+            pixel_to_fl(
+                x_pixel,
+                plot_bounds[
+                    "x_left"
+                ],
+                plot_bounds[
+                    "x_right"
+                ],
+                x_min_fl,
+                x_max_fl,
+            )
+            for x_pixel
+            in crossings_px
+        ]
 
-        crossings_px = []
-
-    crossings_fl = [
-        pixel_to_fl(
-            x_pixel,
-            plot_bounds[
-                "x_left"
-            ],
-            plot_bounds[
-                "x_right"
-            ],
-            x_min_fl,
-            x_max_fl,
+        # Sort from left to right.
+        pairs = sorted(
+            zip(
+                crossings_px,
+                crossings_fl,
+            ),
+            key=lambda item:
+                item[0],
         )
-        for x_pixel
-        in crossings_px
-    ]
 
-    pairs = sorted(
-        zip(
-            crossings_px,
-            crossings_fl,
-        ),
-        key=lambda item: item[0],
-    )
+        crossings_px = [
+            float(
+                item[0]
+            )
+            for item
+            in pairs
+        ]
 
-    crossings_px = [
-        float(item[0])
-        for item
-        in pairs
-    ]
+        crossings_fl = [
+            float(
+                item[1]
+            )
+            for item
+            in pairs
+        ]
 
-    crossings_fl = [
-        float(item[1])
-        for item
-        in pairs
-    ]
+        number_of_crossings = len(
+            crossings_fl
+        )
+
+        if number_of_crossings == 0:
+
+            status = (
+                "no_intersection"
+            )
+
+        elif number_of_crossings == 1:
+
+            status = (
+                "single_intersection"
+            )
+
+        else:
+
+            status = (
+                "measure_width"
+            )
+
+    # --------------------------------------------------------
+    # 7. Calculate measurements
+    # --------------------------------------------------------
 
     number_of_crossings = len(
         crossings_fl
     )
 
-    if not crossing_result.get(
-        "valid",
-        False,
-    ):
-
-        status = "reject"
-
-    elif number_of_crossings == 0:
-
-        status = (
-            "no_intersection"
-        )
-
-    elif number_of_crossings == 1:
-
-        status = (
-            "single_intersection"
-        )
-
-    else:
-
-        status = (
-            "measure_width"
-        )
-
     if crossings_fl:
 
-        minimum_intersection = (
+        minimum_intersection = float(
             min(
                 crossings_fl
             )
         )
 
-        maximum_intersection = (
+        maximum_intersection = float(
             max(
                 crossings_fl
             )
@@ -947,7 +1292,7 @@ def analyze_plt_graph(
 
     if number_of_crossings >= 2:
 
-        width_50 = (
+        width_50 = float(
             maximum_intersection
             - minimum_intersection
         )
@@ -955,6 +1300,10 @@ def analyze_plt_graph(
     else:
 
         width_50 = None
+
+    # --------------------------------------------------------
+    # 8. Generate warnings
+    # --------------------------------------------------------
 
     warnings = []
 
@@ -965,8 +1314,7 @@ def analyze_plt_graph(
 
         warnings.append(
             "Graph boundaries were "
-            "estimated using fallback "
-            "logic. Check the annotation."
+            "estimated using fallback logic."
         )
 
     if status == "reject":
@@ -976,13 +1324,22 @@ def analyze_plt_graph(
             "traced reliably."
         )
 
+    elif reason == "peak_too_low":
+
+        warnings.append(
+            "The detected distribution peak "
+            "is too low for half-peak measurement. "
+            "No 50% point was calculated."
+        )
+
     elif status == (
         "no_intersection"
     ):
 
         warnings.append(
-            "The graph curve did not "
-            "reach the fixed 50% level."
+            "No genuine intersection with "
+            "the curve's 50% peak level "
+            "was detected."
         )
 
     elif status == (
@@ -990,21 +1347,23 @@ def analyze_plt_graph(
     ):
 
         warnings.append(
-            "Only one genuine 50% "
-            "intersection was detected, "
-            "so width cannot be calculated."
+            "Only one genuine half-peak "
+            "intersection was detected. "
+            "Width cannot be calculated."
         )
 
-    elif (
-        number_of_crossings > 2
-    ):
+    elif number_of_crossings > 2:
 
         warnings.append(
-            "More than two intersections "
-            "were detected. Width is "
-            "calculated using maximum X "
-            "minus minimum X."
+            "More than two genuine "
+            "intersections were detected. "
+            "Width uses maximum X minus "
+            "minimum X."
         )
+
+    # --------------------------------------------------------
+    # 9. Curve support
+    # --------------------------------------------------------
 
     support_ratio = float(
         trace_result.get(
@@ -1013,14 +1372,56 @@ def analyze_plt_graph(
         )
     )
 
+    peak_height_ratio = (
+        peak_result.get(
+            "peak_height_ratio"
+        )
+    )
+
+    # --------------------------------------------------------
+    # 10. Result JSON
+    # --------------------------------------------------------
+
     result = {
         "status":
             status,
 
-        "measurement_definition":
+        "reason":
             (
-                "fixed_50_percent_"
-                "of_plot_height"
+                reason
+                if reason is not None
+                else "None"
+            ),
+
+        "measurement_definition":
+            "50_percent_of_detected_curve_peak",
+
+        "minimum_peak_height_ratio":
+            MIN_PEAK_HEIGHT_RATIO,
+
+        "peak_height_ratio":
+            (
+                None
+                if peak_height_ratio is None
+                else round(
+                    float(
+                        peak_height_ratio
+                    ),
+                    4,
+                )
+            ),
+
+        "peak_height_percent":
+            (
+                None
+                if peak_height_ratio is None
+                else round(
+                    float(
+                        peak_height_ratio
+                    )
+                    * 100.0,
+                    2,
+                )
             ),
 
         "x_min_fl":
@@ -1092,14 +1493,16 @@ def analyze_plt_graph(
                 1,
             ),
 
-        "fixed_y50_pixel":
-            round(
-                float(
-                    plot_bounds[
-                        "fixed_y50"
-                    ]
-                ),
-                2,
+        "curve_half_y_pixel":
+            (
+                None
+                if curve_half_y is None
+                else round(
+                    float(
+                        curve_half_y
+                    ),
+                    2,
+                )
             ),
 
         "plot_top_pixel":
@@ -1126,25 +1529,43 @@ def analyze_plt_graph(
             ),
     }
 
-    annotated = annotate_result(
-        image_rgb=original_image,
-        probability_mask=(
-            probability_mask
-        ),
-        plot_bounds=plot_bounds,
-        crossings_px=(
-            crossings_px
-        ),
-        crossings_fl=(
-            crossings_fl
-        ),
-        width_50_fl=(
-            width_50
-        ),
-        status=status,
-        segmentation_threshold=float(
-            segmentation_threshold
-        ),
+    # --------------------------------------------------------
+    # 11. Annotated result
+    # --------------------------------------------------------
+
+    annotated = (
+        annotate_result(
+            image_rgb=(
+                original_image
+            ),
+            probability_mask=(
+                probability_mask
+            ),
+            plot_bounds=(
+                plot_bounds
+            ),
+            crossings_px=(
+                crossings_px
+            ),
+            crossings_fl=(
+                crossings_fl
+            ),
+            curve_half_y=(
+                curve_half_y
+            ),
+            width_50_fl=(
+                width_50
+            ),
+            status=(
+                status
+            ),
+            reason=(
+                reason
+            ),
+            segmentation_threshold=float(
+                segmentation_threshold
+            ),
+        )
     )
 
     result_table = (

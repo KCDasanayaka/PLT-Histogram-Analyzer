@@ -1,143 +1,194 @@
 # 📈 PLT Histogram Analyzer
 
-A deep-learning-based application for analyzing PLT histogram
-graphs and detecting where the graph curve reaches a fixed
-50% of the plotting height.
+A deep-learning-based application for analyzing
+PLT histogram graphs.
 
-The application uses a trained U-Net segmentation model to
-identify the PLT histogram curve and deterministic geometry
-to calculate intersection positions.
-
----
-
-## Live Application
-
-This project is designed to run using
-**Streamlit Community Cloud**.
-
-The application allows users to:
-
-1. Upload a cropped PLT histogram graph.
-2. Detect the histogram curve.
-3. Locate the fixed 50% graph-height level.
-4. Detect all genuine curve intersections.
-5. Calculate X-axis intersection values in fL.
-6. Calculate the width when two or more intersections exist.
+The system uses a trained U-Net model to detect
+the actual PLT distribution curve and then applies
+geometric analysis to identify where the curve reaches
+50% of its own peak height.
 
 ---
 
-## Measurement Logic
+## Measurement Method
 
-The vertical plotting area is interpreted as:
+The current system does **not** use a fixed 50%
+position on the graph Y-axis.
+
+Instead, it first detects the PLT distribution.
 
 ```text
-100% ───────────────────────── Graph Top
- |
- |
- 50% ───────────────────────── Fixed Measurement Level
- |
- |
- 0%  ───────────────────────── X-axis Baseline
+Graph Top
+────────────────────────────
+
+          Curve Peak
+             ▲
+             │
+             │
+Curve 50% ──────────────────
+             │
+             │
+────────────────────────────
+X-axis / Baseline
 ```
 
-The 50% level is based on the plotting area.
+The curve peak represents 100% of the detected
+distribution height.
 
-It does **not** depend on the maximum height of the detected
-curve.
+The measurement level is:
+
+```text
+50% of detected curve peak height
+```
 
 ---
 
-## Result Logic
+## Low Distribution Rejection
 
-### No Intersection
+Before calculating the curve's 50% level,
+the system checks how high the distribution
+peak is compared with the complete graph height.
 
-If the curve does not reach the fixed 50% level:
+The current minimum requirement is:
+
+```text
+Peak Height ≥ 50% of graph plotting height
+```
+
+If the peak is lower than this threshold:
 
 ```text
 Status: no_intersection
+50% Line: Not generated
 Intersections: 0
 Width: Not available
 ```
 
+This prevents very low PLT distributions from
+producing misleading half-peak measurements.
+
 ---
+
+## Intersection Logic
+
+### No Intersection
+
+```text
+Intersections = 0
+Width = Not available
+```
 
 ### One Intersection
 
-If the curve reaches the fixed 50% level only once:
-
 ```text
-Status: single_intersection
-Intersections: 1
-Width: Not available
+Intersections = 1
+Width = Not available
 ```
-
----
 
 ### Two Intersections
 
-If two intersections exist:
-
 ```text
 Width =
-Maximum X Intersection
--
-Minimum X Intersection
+Right X - Left X
 ```
-
----
 
 ### More Than Two Intersections
 
-All genuine intersections are returned.
+All genuine intersections are reported.
 
 For example:
 
 ```text
-Point 1 = 5.32 fL
-Point 2 = 11.47 fL
-Point 3 = 29.84 fL
+Point 1 = 4.82 fL
+Point 2 = 10.75 fL
+Point 3 = 31.40 fL
 ```
 
-The final width is:
+The width is:
 
 ```text
-29.84 - 5.32
+31.40 - 4.82
 =
-24.52 fL
+26.58 fL
 ```
 
 Therefore:
 
 ```text
 Width =
-Maximum Intersection
+Maximum X intersection
 -
-Minimum Intersection
+Minimum X intersection
 ```
 
 ---
 
-## Model
+## Model Architecture
 
-The application uses a U-Net-based semantic segmentation
-network trained to identify the PLT histogram curve.
+The application uses a U-Net semantic
+segmentation model.
 
-The trained model checkpoint is:
+The neural network is responsible only for:
 
 ```text
-models/plt_curve_unet_fixed50_best.pt
+Input PLT Graph
+        ↓
+Curve Segmentation
+        ↓
+Detected PLT Curve
 ```
 
-The neural network is responsible for curve segmentation.
+The model does not directly predict the
+50% intersection values.
 
-The following operations are performed using deterministic
-geometry:
+---
+
+## Post-processing
+
+After segmentation, deterministic geometry
+is used for:
 
 - Graph boundary detection
-- Fixed 50% level calculation
+- Curve tracing
+- Peak detection
+- Low-distribution rejection
+- Half-peak calculation
 - Intersection detection
-- X-coordinate conversion
+- X-axis conversion to fL
 - Width calculation
+
+---
+
+## Current Measurement Pipeline
+
+```text
+Upload PLT Graph
+        ↓
+U-Net Curve Segmentation
+        ↓
+Remove Axes / Reference Lines
+        ↓
+Trace PLT Distribution Curve
+        ↓
+Detect Distribution Peak
+        ↓
+Calculate Peak Height Relative to Graph
+        ↓
+Is Peak ≥ 50% of Graph Height?
+       / \
+     NO   YES
+     ↓      ↓
+No         Calculate 50%
+Measurement of Curve Peak
+            ↓
+       Find All Genuine
+       Intersections
+            ↓
+       Convert X → fL
+            ↓
+       Calculate Width
+       if 2+ points
+```
 
 ---
 
@@ -159,6 +210,37 @@ PLT-Histogram-Analyzer/
 
 ---
 
+## Important Note About Model Filename
+
+The checkpoint currently retains the filename:
+
+```text
+plt_curve_unet_fixed50_best.pt
+```
+
+However, the U-Net checkpoint is used only
+for curve segmentation.
+
+The current 50% measurement calculation is
+performed inside:
+
+```text
+analyzer.py
+```
+
+and uses:
+
+```text
+50% of detected curve peak
+```
+
+rather than a fixed 50% Y-axis position.
+
+Therefore retraining the segmentation model
+is not required for this measurement-logic change.
+
+---
+
 ## Technologies
 
 - Python
@@ -172,113 +254,59 @@ PLT-Histogram-Analyzer/
 
 ---
 
-## Run Locally
+## Running Locally
 
-Clone the repository:
-
-```bash
-git clone YOUR_GITHUB_REPOSITORY_URL
-```
-
-Move into the project:
-
-```bash
-cd PLT-Histogram-Analyzer
-```
-
-Install the dependencies:
+Install dependencies:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Run the Streamlit application:
+Start Streamlit:
 
 ```bash
 streamlit run app.py
 ```
 
-The application should open in your browser.
-
-Usually the local address is:
-
-```text
-http://localhost:8501
-```
-
 ---
 
-## Streamlit Community Cloud Deployment
+## Streamlit Deployment
 
-The application can be deployed directly from GitHub.
+The project can be deployed using
+Streamlit Community Cloud.
 
-### Step 1
-
-Push the complete project to GitHub.
-
-Make sure the repository contains:
-
-```text
-app.py
-model.py
-analyzer.py
-preprocessing.py
-requirements.txt
-models/plt_curve_unet_fixed50_best.pt
-```
-
-### Step 2
-
-Open Streamlit Community Cloud.
-
-Sign in using your GitHub account.
-
-### Step 3
-
-Choose:
-
-```text
-Create app
-```
-
-Select the GitHub repository containing this project.
-
-### Step 4
-
-Set the main file path to:
+Connect the GitHub repository and choose:
 
 ```text
 app.py
 ```
 
-### Step 5
+as the main application file.
 
-Deploy the application.
-
-Streamlit will install the packages listed in:
+Streamlit will automatically install
+the packages listed in:
 
 ```text
 requirements.txt
 ```
 
-and start the application automatically.
+and start the application.
 
 ---
 
 ## Input Requirements
 
-For better results, upload only the cropped PLT histogram
-area.
+Upload a cropped PLT histogram.
 
-The graph should preferably contain:
+For better detection, the image should contain:
 
 - Complete X-axis
 - Complete Y-axis
-- Full histogram curve
-- Clear graph boundaries
-- Minimal surrounding report text
+- Complete histogram distribution
+- Clear curve
+- Minimal surrounding report content
 
-Supported image formats include:
+Supported formats:
 
 ```text
 PNG
@@ -289,7 +317,7 @@ WEBP
 
 ---
 
-## X-Axis Range
+## X-Axis Support
 
 The application currently supports:
 
@@ -297,75 +325,53 @@ The application currently supports:
 0–40 fL
 ```
 
-and
+and:
 
 ```text
 0–30 fL
 ```
 
-The correct range should be selected before analysis.
+The correct range should be selected before
+performing analysis.
 
 ---
 
 ## Curve Detection Sensitivity
 
-The Curve Detection Sensitivity controls the minimum
-segmentation probability accepted as part of the curve.
+The Curve Detection Sensitivity controls how
+confident the U-Net must be before a pixel is
+accepted as part of the PLT curve.
 
-Lower values:
+Lower values detect fainter curves but may
+include additional noise.
 
-```text
-Detect faint lines
-+
-May detect additional noise
-```
-
-Higher values:
-
-```text
-Detect clearer curve pixels
-+
-May miss very faint parts
-```
-
-The default value is loaded from the trained model
-checkpoint.
+Higher values require clearer curve pixels
+but may miss faint curve sections.
 
 ---
 
 ## Output
 
-The application provides:
+The system provides:
 
-- Analysis status
-- Annotated histogram
-- Fixed 50% line
-- Number of intersections
-- Individual X intersection values
-- Minimum intersection
-- Maximum intersection
+- Distribution status
+- Detected peak height
+- Half-peak measurement level
+- Number of genuine intersections
+- Individual intersection X values
+- Minimum X
+- Maximum X
 - Width at 50%
+- Annotated graph
 - Curve support information
 - Detailed JSON result
 
 ---
 
-## Model Loading
-
-The trained PyTorch model is loaded using Streamlit's
-resource caching.
-
-This means the model is loaded when the application starts
-and reused for subsequent predictions.
-
-The model is **not retrained** when a user uploads a graph.
-
----
-
 ## Disclaimer
 
-This project is a research prototype developed for automated
-PLT histogram graph analysis.
+This application is a research prototype for
+automated PLT histogram graph analysis.
 
-It is not intended to provide medical diagnosis, treatment
-recommendations, or clinical decisions.
+It is not intended for medical diagnosis,
+treatment recommendations, or clinical decisions.
