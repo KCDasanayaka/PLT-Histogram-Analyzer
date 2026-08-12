@@ -3,19 +3,17 @@ import numpy as np
 import torch
 
 from PIL import Image
-
-from scipy.signal import (
-    savgol_filter,
-)
-
-from scipy.ndimage import (
-    median_filter,
-)
+from scipy.signal import savgol_filter
+from scipy.ndimage import median_filter
 
 
 IMAGE_HEIGHT = 192
 IMAGE_WIDTH = 288
 
+
+# ============================================================
+# IMAGE PREPARATION
+# ============================================================
 
 def resize_and_pad_image(
     image,
@@ -23,35 +21,21 @@ def resize_and_pad_image(
     output_height=IMAGE_HEIGHT,
 ):
 
-    original_height, original_width = (
-        image.shape[:2]
-    )
+    original_height, original_width = image.shape[:2]
 
     scale = min(
-        output_width
-        / original_width,
-        output_height
-        / original_height,
+        output_width / original_width,
+        output_height / original_height,
     )
 
     resized_width = max(
         1,
-        int(
-            round(
-                original_width
-                * scale
-            )
-        ),
+        int(round(original_width * scale)),
     )
 
     resized_height = max(
         1,
-        int(
-            round(
-                original_height
-                * scale
-            )
-        ),
+        int(round(original_height * scale)),
     )
 
     interpolation = (
@@ -98,23 +82,12 @@ def resize_and_pad_image(
     ] = resized_image
 
     transform_info = {
-        "x_offset":
-            x_offset,
-
-        "y_offset":
-            y_offset,
-
-        "resized_width":
-            resized_width,
-
-        "resized_height":
-            resized_height,
-
-        "original_width":
-            original_width,
-
-        "original_height":
-            original_height,
+        "x_offset": x_offset,
+        "y_offset": y_offset,
+        "resized_width": resized_width,
+        "resized_height": resized_height,
+        "original_width": original_width,
+        "original_height": original_height,
     }
 
     return (
@@ -129,6 +102,7 @@ def prepare_inference_image(
 ):
 
     if input_image is None:
+
         raise ValueError(
             "Please upload a PLT graph."
         )
@@ -152,35 +126,26 @@ def prepare_inference_image(
 
         if image_rgb.ndim == 2:
 
-            image_rgb = (
-                cv2.cvtColor(
-                    image_rgb,
-                    cv2.COLOR_GRAY2RGB,
-                )
+            image_rgb = cv2.cvtColor(
+                image_rgb,
+                cv2.COLOR_GRAY2RGB,
             )
 
         if (
             image_rgb.ndim == 3
-            and image_rgb.shape[2]
-            == 4
+            and image_rgb.shape[2] == 4
         ):
 
-            image_rgb = (
-                cv2.cvtColor(
-                    image_rgb,
-                    cv2.COLOR_RGBA2RGB,
-                )
+            image_rgb = cv2.cvtColor(
+                image_rgb,
+                cv2.COLOR_RGBA2RGB,
             )
 
-        image_rgb = (
-            image_rgb.astype(
-                np.uint8
-            )
+        image_rgb = image_rgb.astype(
+            np.uint8
         )
 
-    height, width = (
-        image_rgb.shape[:2]
-    )
+    height, width = image_rgb.shape[:2]
 
     if (
         height < 60
@@ -188,15 +153,15 @@ def prepare_inference_image(
     ):
 
         raise ValueError(
-            "The uploaded image is "
-            "too small. Upload a "
-            "clear cropped PLT graph."
+            "The uploaded image is too small. "
+            "Upload a clear cropped PLT graph."
         )
 
-    resized_image, transform_info = (
-        resize_and_pad_image(
-            image_rgb
-        )
+    (
+        resized_image,
+        transform_info,
+    ) = resize_and_pad_image(
+        image_rgb
     )
 
     tensor = (
@@ -293,6 +258,10 @@ def restore_probability_mask(
     )
 
 
+# ============================================================
+# GRAPH BOUNDARY DETECTION
+# ============================================================
+
 def longest_horizontal_segment(
     binary_row,
 ):
@@ -307,29 +276,36 @@ def longest_horizontal_segment(
 
         if (
             value
-            and current_start
-            is None
+            and current_start is None
         ):
+
             current_start = index
 
+        at_end = (
+            index
+            == len(binary_row) - 1
+        )
+
         if (
-            (
+            current_start is not None
+            and (
                 not value
-                or index
-                == len(binary_row) - 1
+                or at_end
             )
-            and current_start
-            is not None
         ):
 
             if (
                 value
-                and index
-                == len(binary_row) - 1
+                and at_end
             ):
+
                 end = index
+
             else:
-                end = index - 1
+
+                end = (
+                    index - 1
+                )
 
             if (
                 best_start is None
@@ -385,6 +361,10 @@ def detect_plot_bounds(
         )
     )
 
+    # ========================================================
+    # X AXIS / BASELINE
+    # ========================================================
+
     horizontal_kernel = (
         cv2.getStructuringElement(
             cv2.MORPH_RECT,
@@ -406,28 +386,41 @@ def detect_plot_bounds(
         )
     )
 
-    row_scores = (
-        horizontal.sum(
-            axis=1
-        )
+    row_scores = horizontal.sum(
+        axis=1
     )
 
     candidate_rows = np.arange(
-        int(
-            height * 0.48
-        ),
+        int(height * 0.48),
         height,
     )
 
-    baseline_y = int(
-        candidate_rows[
-            np.argmax(
-                row_scores[
-                    candidate_rows
-                ]
-            )
-        ]
-    )
+    if len(candidate_rows) == 0:
+
+        baseline_y = int(
+            height * 0.80
+        )
+
+        baseline_ok = False
+
+    else:
+
+        baseline_y = int(
+            candidate_rows[
+                np.argmax(
+                    row_scores[
+                        candidate_rows
+                    ]
+                )
+            ]
+        )
+
+        baseline_ok = (
+            row_scores[
+                baseline_y
+            ]
+            > 0
+        )
 
     row_binary = (
         horizontal[
@@ -471,9 +464,9 @@ def detect_plot_bounds(
 
         baseline_ok = False
 
-    else:
-
-        baseline_ok = True
+    # ========================================================
+    # Y AXIS
+    # ========================================================
 
     vertical_kernel = (
         cv2.getStructuringElement(
@@ -535,16 +528,12 @@ def detect_plot_bounds(
             )
         )
 
-        column_binary = (
+        y_positions = np.where(
             vertical[
                 :baseline_y + 1,
                 x_left,
             ]
             > 0
-        )
-
-        y_positions = np.where(
-            column_binary
         )[0]
 
         if len(
@@ -581,6 +570,10 @@ def detect_plot_bounds(
         x_right_horizontal
     )
 
+    # ========================================================
+    # SANITY CHECKS
+    # ========================================================
+
     if (
         baseline_y
         - y_top
@@ -613,35 +606,50 @@ def detect_plot_bounds(
 
         baseline_ok = False
 
-    fixed_y50 = (
-        y_top
-        + baseline_y
-    ) / 2.0
+    x_left = int(
+        np.clip(
+            x_left,
+            0,
+            width - 2,
+        )
+    )
 
-    confidence = float(
-        np.mean(
-            [
-                baseline_ok,
-                y_axis_ok,
-            ]
+    x_right = int(
+        np.clip(
+            x_right,
+            x_left + 1,
+            width - 1,
+        )
+    )
+
+    y_top = int(
+        np.clip(
+            y_top,
+            0,
+            baseline_y - 1,
+        )
+    )
+
+    baseline_y = int(
+        np.clip(
+            baseline_y,
+            y_top + 1,
+            height - 1,
         )
     )
 
     return {
         "x_left":
-            int(x_left),
+            x_left,
 
         "x_right":
-            int(x_right),
+            x_right,
 
         "y_top":
-            int(y_top),
+            y_top,
 
         "baseline_y":
-            int(baseline_y),
-
-        "fixed_y50":
-            float(fixed_y50),
+            baseline_y,
 
         "automatic":
             bool(
@@ -650,9 +658,20 @@ def detect_plot_bounds(
             ),
 
         "confidence":
-            confidence,
+            float(
+                np.mean(
+                    [
+                        baseline_ok,
+                        y_axis_ok,
+                    ]
+                )
+            ),
     }
 
+
+# ============================================================
+# UTILITY
+# ============================================================
 
 def find_true_runs(
     boolean_array,
@@ -702,7 +721,280 @@ def find_true_runs(
     )
 
 
-def remove_vertical_artifacts(
+def fill_small_nan_gaps(
+    values,
+    maximum_gap,
+):
+
+    values = values.copy()
+
+    valid = np.where(
+        np.isfinite(
+            values
+        )
+    )[0]
+
+    if len(valid) < 2:
+
+        return values
+
+    for left, right in zip(
+        valid[:-1],
+        valid[1:],
+    ):
+
+        gap = (
+            right
+            - left
+            - 1
+        )
+
+        if (
+            gap > 0
+            and gap
+            <= maximum_gap
+        ):
+
+            values[
+                left:
+                right + 1
+            ] = np.linspace(
+                values[left],
+                values[right],
+                gap + 2,
+            )
+
+    return values
+
+
+# ============================================================
+# REMOVE Y AXIS + DOTTED LINES
+# ============================================================
+
+def _detect_vertical_artifact_columns(
+    binary_mask,
+    plot_bounds,
+):
+
+    height, width = (
+        binary_mask.shape
+    )
+
+    x_left = (
+        plot_bounds[
+            "x_left"
+        ]
+    )
+
+    x_right = (
+        plot_bounds[
+            "x_right"
+        ]
+    )
+
+    y_top = (
+        plot_bounds[
+            "y_top"
+        ]
+    )
+
+    baseline_y = (
+        plot_bounds[
+            "baseline_y"
+        ]
+    )
+
+    plot_height = max(
+        1,
+        baseline_y - y_top,
+    )
+
+    plot_width = max(
+        1,
+        x_right - x_left,
+    )
+
+    bad_columns = np.zeros(
+        width,
+        dtype=bool,
+    )
+
+    # --------------------------------------------------------
+    # Explicitly ignore the Y-axis area.
+    # --------------------------------------------------------
+
+    y_axis_margin = max(
+        3,
+        int(
+            round(
+                plot_width
+                * 0.012
+            )
+        ),
+    )
+
+    bad_columns[
+        max(
+            0,
+            x_left - 1,
+        ):
+        min(
+            width,
+            x_left
+            + y_axis_margin
+            + 1,
+        )
+    ] = True
+
+    region = binary_mask[
+        y_top:
+        baseline_y,
+
+        x_left:
+        x_right + 1,
+    ]
+
+    if region.size == 0:
+
+        return bad_columns
+
+    column_counts = (
+        region.sum(
+            axis=0
+        )
+        .astype(
+            np.float32
+        )
+    )
+
+    column_spans = np.zeros(
+        region.shape[1],
+        dtype=np.float32,
+    )
+
+    transition_counts = np.zeros(
+        region.shape[1],
+        dtype=np.float32,
+    )
+
+    for local_x in range(
+        region.shape[1]
+    ):
+
+        ys = np.where(
+            region[
+                :,
+                local_x,
+            ]
+            > 0
+        )[0]
+
+        if len(ys) == 0:
+
+            continue
+
+        column_spans[
+            local_x
+        ] = float(
+            ys[-1]
+            - ys[0]
+            + 1
+        )
+
+        column = (
+            region[
+                :,
+                local_x,
+            ]
+            .astype(
+                np.int8
+            )
+        )
+
+        transition_counts[
+            local_x
+        ] = float(
+            np.abs(
+                np.diff(
+                    column
+                )
+            ).sum()
+        )
+
+    # --------------------------------------------------------
+    # Solid vertical line
+    # --------------------------------------------------------
+
+    solid_like = (
+        (
+            column_spans
+            >= plot_height * 0.55
+        )
+        &
+        (
+            column_counts
+            >= plot_height * 0.20
+        )
+    )
+
+    # --------------------------------------------------------
+    # Dotted vertical line
+    # --------------------------------------------------------
+
+    dotted_like = (
+        (
+            column_spans
+            >= plot_height * 0.50
+        )
+        &
+        (
+            transition_counts
+            >= 5
+        )
+        &
+        (
+            column_counts
+            >= 4
+        )
+    )
+
+    local_bad = (
+        solid_like
+        | dotted_like
+    )
+
+    # Slight horizontal expansion
+    # to remove line thickness.
+    local_bad_u8 = (
+        local_bad
+        .astype(
+            np.uint8
+        )[None, :]
+    )
+
+    local_bad_u8 = cv2.dilate(
+        local_bad_u8,
+        np.ones(
+            (1, 3),
+            np.uint8,
+        ),
+        iterations=1,
+    )
+
+    local_bad = (
+        local_bad_u8[0]
+        > 0
+    )
+
+    bad_columns[
+        x_left:
+        x_right + 1
+    ] |= local_bad
+
+    return bad_columns
+
+
+def remove_structural_artifacts(
     binary_mask,
     plot_bounds,
 ):
@@ -739,69 +1031,7 @@ def remove_vertical_artifacts(
         ]
     )
 
-    plot_height = max(
-        1,
-        baseline_y - y_top,
-    )
-
-    cleaned[
-        :,
-        max(
-            0,
-            x_left - 3,
-        ):
-        min(
-            cleaned.shape[1],
-            x_left + 5,
-        ),
-    ] = 0
-
-    cleaned[
-        max(
-            0,
-            baseline_y - 2,
-        ):
-        ,
-        :
-    ] = 0
-
-    vertical_kernel = (
-        cv2.getStructuringElement(
-            cv2.MORPH_RECT,
-            (
-                1,
-                max(
-                    8,
-                    int(
-                        plot_height
-                        * 0.28
-                    ),
-                ),
-            ),
-        )
-    )
-
-    vertical_lines = (
-        cv2.morphologyEx(
-            cleaned,
-            cv2.MORPH_OPEN,
-            vertical_kernel,
-        )
-    )
-
-    vertical_lines = cv2.dilate(
-        vertical_lines,
-        np.ones(
-            (3, 3),
-            np.uint8,
-        ),
-        iterations=1,
-    )
-
-    cleaned[
-        vertical_lines > 0
-    ] = 0
-
+    # Keep only plotting region.
     region_mask = np.zeros_like(
         cleaned
     )
@@ -816,52 +1046,327 @@ def remove_vertical_artifacts(
 
     cleaned *= region_mask
 
-    return cleaned
+    # Remove the X-axis area.
+    baseline_margin = 3
+
+    cleaned[
+        max(
+            0,
+            baseline_y
+            - baseline_margin,
+        ):
+        ,
+        :
+    ] = 0
+
+    bad_columns = (
+        _detect_vertical_artifact_columns(
+            cleaned,
+            plot_bounds,
+        )
+    )
+
+    cleaned[
+        :,
+        bad_columns
+    ] = 0
+
+    return (
+        cleaned,
+        bad_columns,
+    )
 
 
-def fill_small_nan_gaps(
-    values,
-    maximum_gap,
+# ============================================================
+# CONTINUOUS CURVE TRACING
+# ============================================================
+
+def _column_candidates(
+    probability_mask,
+    cleaned_mask,
+    x_pixel,
+    y_top,
+    baseline_y,
+    minimum_probability,
 ):
 
-    values = values.copy()
+    ys = (
+        np.where(
+            cleaned_mask[
+                y_top:
+                baseline_y,
+                x_pixel,
+            ]
+            > 0
+        )[0]
+        + y_top
+    )
 
-    valid = np.where(
-        np.isfinite(
-            values
+    if len(ys) == 0:
+
+        return (
+            np.array(
+                [],
+                dtype=np.int32,
+            ),
+            np.array(
+                [],
+                dtype=np.float32,
+            ),
         )
-    )[0]
 
-    if len(valid) < 2:
-        return values
+    probabilities = (
+        probability_mask[
+            ys,
+            x_pixel,
+        ]
+        .astype(
+            np.float32
+        )
+    )
 
-    for left, right in zip(
-        valid[:-1],
-        valid[1:],
+    keep = (
+        probabilities
+        >= minimum_probability
+    )
+
+    return (
+        ys[keep],
+        probabilities[keep],
+    )
+
+
+def _choose_seed_column(
+    probability_mask,
+    cleaned_mask,
+    plot_bounds,
+    segmentation_threshold,
+):
+
+    x_left = (
+        plot_bounds[
+            "x_left"
+        ]
+    )
+
+    x_right = (
+        plot_bounds[
+            "x_right"
+        ]
+    )
+
+    y_top = (
+        plot_bounds[
+            "y_top"
+        ]
+    )
+
+    baseline_y = (
+        plot_bounds[
+            "baseline_y"
+        ]
+    )
+
+    plot_width = max(
+        1,
+        x_right - x_left,
+    )
+
+    start = (
+        x_left
+        + max(
+            4,
+            int(
+                round(
+                    plot_width
+                    * 0.03
+                )
+            ),
+        )
+    )
+
+    end = (
+        x_right
+        - max(
+            2,
+            int(
+                round(
+                    plot_width
+                    * 0.02
+                )
+            ),
+        )
+    )
+
+    best = None
+
+    for x_pixel in range(
+        start,
+        max(
+            start + 1,
+            end + 1,
+        ),
     ):
 
-        gap = (
-            right
-            - left
-            - 1
+        (
+            ys,
+            probabilities,
+        ) = _column_candidates(
+            probability_mask,
+            cleaned_mask,
+            x_pixel,
+            y_top,
+            baseline_y,
+            segmentation_threshold,
+        )
+
+        if len(ys) == 0:
+
+            continue
+
+        span = float(
+            ys.max()
+            - ys.min()
+            + 1
+        )
+
+        compactness_penalty = (
+            span
+            / max(
+                1.0,
+                baseline_y - y_top,
+            )
+        )
+
+        score = (
+            float(
+                probabilities.max()
+            )
+            - 0.35
+            * compactness_penalty
         )
 
         if (
-            gap > 0
-            and gap
-            <= maximum_gap
+            best is None
+            or score > best[0]
         ):
 
-            values[
-                left:
-                right + 1
-            ] = np.linspace(
-                values[left],
-                values[right],
-                gap + 2,
+            best = (
+                score,
+                x_pixel,
+                ys,
+                probabilities,
             )
 
-    return values
+    return best
+
+
+def _pick_candidate_near_previous(
+    ys,
+    probabilities,
+    previous_y,
+    plot_height,
+):
+
+    if len(ys) == 0:
+
+        return (
+            None,
+            0.0,
+        )
+
+    if (
+        previous_y is None
+        or not np.isfinite(
+            previous_y
+        )
+    ):
+
+        best_index = int(
+            np.argmax(
+                probabilities
+            )
+        )
+
+        return (
+            float(
+                ys[
+                    best_index
+                ]
+            ),
+            float(
+                probabilities[
+                    best_index
+                ]
+            ),
+        )
+
+    jump = np.abs(
+        ys.astype(
+            np.float32
+        )
+        - float(
+            previous_y
+        )
+    )
+
+    normalized_jump = (
+        jump
+        / max(
+            float(
+                plot_height
+            ),
+            1.0,
+        )
+    )
+
+    # Continuity is more important
+    # than raw probability.
+    cost = (
+        1.75
+        * normalized_jump
+        - 0.75
+        * probabilities
+    )
+
+    best_index = int(
+        np.argmin(
+            cost
+        )
+    )
+
+    max_jump = max(
+        5.0,
+        plot_height * 0.18,
+    )
+
+    if (
+        jump[
+            best_index
+        ] > max_jump
+        and
+        probabilities[
+            best_index
+        ] < 0.70
+    ):
+
+        return (
+            None,
+            0.0,
+        )
+
+    return (
+        float(
+            ys[
+                best_index
+            ]
+        ),
+        float(
+            probabilities[
+                best_index
+            ]
+        ),
+    )
 
 
 def trace_curve_centerline(
@@ -894,6 +1399,11 @@ def trace_curve_centerline(
         ]
     )
 
+    plot_height = max(
+        1,
+        baseline_y - y_top,
+    )
+
     binary = (
         probability_mask
         >= segmentation_threshold
@@ -901,11 +1411,12 @@ def trace_curve_centerline(
         np.uint8
     )
 
-    binary = (
-        remove_vertical_artifacts(
-            binary,
-            plot_bounds,
-        )
+    (
+        cleaned_mask,
+        bad_columns,
+    ) = remove_structural_artifacts(
+        binary,
+        plot_bounds,
     )
 
     x_values = np.arange(
@@ -925,79 +1436,183 @@ def trace_curve_centerline(
         dtype=np.float32,
     )
 
-    for local_index, x_pixel in enumerate(
-        range(
-            x_left,
-            x_right + 1,
+    # ========================================================
+    # FIND A REAL CURVE STARTING POINT
+    # ========================================================
+
+    seed = _choose_seed_column(
+        probability_mask,
+        cleaned_mask,
+        plot_bounds,
+        segmentation_threshold,
+    )
+
+    if seed is None:
+
+        return {
+            "valid":
+                False,
+
+            "x":
+                x_values,
+
+            "y":
+                centerline,
+
+            "support":
+                support,
+
+            "support_ratio":
+                0.0,
+
+            "cleaned_mask":
+                cleaned_mask,
+
+            "bad_columns":
+                bad_columns,
+        }
+
+    (
+        _,
+        seed_x,
+        seed_ys,
+        seed_probabilities,
+    ) = seed
+
+    seed_local = int(
+        seed_x - x_left
+    )
+
+    seed_index = int(
+        np.argmax(
+            seed_probabilities
         )
+    )
+
+    seed_y = float(
+        seed_ys[
+            seed_index
+        ]
+    )
+
+    centerline[
+        seed_local
+    ] = seed_y
+
+    support[
+        seed_local
+    ] = float(
+        seed_probabilities[
+            seed_index
+        ]
+    )
+
+    # ========================================================
+    # TRACE RIGHT
+    # ========================================================
+
+    previous_y = seed_y
+
+    for x_pixel in range(
+        seed_x + 1,
+        x_right + 1,
     ):
 
-        y_candidates = (
-            np.where(
-                binary[
-                    y_top:
-                    baseline_y,
-                    x_pixel,
-                ]
-                > 0
-            )[0]
-            + y_top
+        local_index = (
+            x_pixel - x_left
         )
 
-        if len(
-            y_candidates
-        ) == 0:
+        (
+            ys,
+            probabilities,
+        ) = _column_candidates(
+            probability_mask,
+            cleaned_mask,
+            x_pixel,
+            y_top,
+            baseline_y,
+            segmentation_threshold,
+        )
+
+        (
+            chosen_y,
+            chosen_probability,
+        ) = _pick_candidate_near_previous(
+            ys,
+            probabilities,
+            previous_y,
+            plot_height,
+        )
+
+        if chosen_y is None:
+
             continue
-
-        probabilities = (
-            probability_mask[
-                y_candidates,
-                x_pixel,
-            ]
-        )
-
-        total_probability = float(
-            probabilities.sum()
-        )
-
-        if total_probability <= 0:
-            continue
-
-        cumulative = np.cumsum(
-            probabilities
-        )
-
-        median_index = int(
-            np.searchsorted(
-                cumulative,
-                cumulative[-1]
-                / 2.0,
-            )
-        )
-
-        median_index = int(
-            np.clip(
-                median_index,
-                0,
-                len(
-                    y_candidates
-                ) - 1,
-            )
-        )
 
         centerline[
             local_index
-        ] = float(
-            y_candidates[
-                median_index
-            ]
-        )
+        ] = chosen_y
 
         support[
             local_index
-        ] = float(
-            probabilities.mean()
+        ] = chosen_probability
+
+        previous_y = chosen_y
+
+    # ========================================================
+    # TRACE LEFT
+    # ========================================================
+
+    previous_y = seed_y
+
+    for x_pixel in range(
+        seed_x - 1,
+        x_left - 1,
+        -1,
+    ):
+
+        local_index = (
+            x_pixel - x_left
         )
+
+        (
+            ys,
+            probabilities,
+        ) = _column_candidates(
+            probability_mask,
+            cleaned_mask,
+            x_pixel,
+            y_top,
+            baseline_y,
+            segmentation_threshold,
+        )
+
+        (
+            chosen_y,
+            chosen_probability,
+        ) = _pick_candidate_near_previous(
+            ys,
+            probabilities,
+            previous_y,
+            plot_height,
+        )
+
+        if chosen_y is None:
+
+            continue
+
+        centerline[
+            local_index
+        ] = chosen_y
+
+        support[
+            local_index
+        ] = chosen_probability
+
+        previous_y = chosen_y
+
+    # ========================================================
+    # SMALL GAP REPAIR
+    # ========================================================
 
     maximum_gap = max(
         2,
@@ -1016,11 +1631,13 @@ def trace_curve_centerline(
         )
     )
 
-    valid_runs = (
-        find_true_runs(
-            np.isfinite(
-                centerline
-            )
+    # ========================================================
+    # REMOVE SHORT FALSE SEGMENTS
+    # ========================================================
+
+    valid_runs = find_true_runs(
+        np.isfinite(
+            centerline
         )
     )
 
@@ -1092,6 +1709,56 @@ def trace_curve_centerline(
             end + 1
         ] = run
 
+    # ========================================================
+    # REMOVE ISOLATED FALSE PEAKS
+    # ========================================================
+
+    finite_indexes = np.where(
+        np.isfinite(
+            centerline
+        )
+    )[0]
+
+    if len(
+        finite_indexes
+    ) >= 7:
+
+        finite_values = centerline[
+            finite_indexes
+        ]
+
+        filtered_values = median_filter(
+            finite_values,
+            size=5,
+            mode="nearest",
+        )
+
+        deviations = np.abs(
+            finite_values
+            - filtered_values
+        )
+
+        extreme = (
+            deviations
+            > max(
+                4.0,
+                plot_height * 0.12,
+            )
+        )
+
+        centerline[
+            finite_indexes[
+                extreme
+            ]
+        ] = np.nan
+
+        centerline = (
+            fill_small_nan_gaps(
+                centerline,
+                maximum_gap,
+            )
+        )
+
     valid_count = int(
         np.isfinite(
             centerline
@@ -1134,5 +1801,8 @@ def trace_curve_centerline(
             support_ratio,
 
         "cleaned_mask":
-            binary,
+            cleaned_mask,
+
+        "bad_columns":
+            bad_columns,
     }
