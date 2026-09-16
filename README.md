@@ -1,377 +1,96 @@
-# 📈 PLT Histogram Analyzer
+# PLT Histogram Analyzer - V8 Streamlit
 
-A deep-learning-based application for analyzing
-PLT histogram graphs.
+This project updates the deployed Streamlit application to use the V8 PLT ROI Peak-50% pipeline.
 
-The system uses a trained U-Net model to detect
-the actual PLT distribution curve and then applies
-geometric analysis to identify where the curve reaches
-50% of its own peak height.
+## V8 measurement flow
 
----
+1. Upload only the PLT graph image.
+2. Detect the two vertical dashed reference boundaries.
+3. Analyze only the image region between those boundaries.
+4. Run the V8 U-Net curve segmentation model.
+5. Estimate the plotting baseline.
+6. Track one continuous curve from its strongest model response.
+7. Select the highest point actually reached by that tracked curve inside the ROI.
+8. Calculate the 50% level from that detected peak height.
+9. Keep only genuine crossings of the traced curve with the 50% level.
+10. Calculate width only when at least two genuine intersections exist.
 
-## Measurement Method
+There is no artificial left/right intersection creation.
 
-The current system does **not** use a fixed 50%
-position on the graph Y-axis.
-
-Instead, it first detects the PLT distribution.
-
-```text
-Graph Top
-────────────────────────────
-
-          Curve Peak
-             ▲
-             │
-             │
-Curve 50% ──────────────────
-             │
-             │
-────────────────────────────
-X-axis / Baseline
-```
-
-The curve peak represents 100% of the detected
-distribution height.
-
-The measurement level is:
+## Project structure
 
 ```text
-50% of detected curve peak height
-```
-
----
-
-## Low Distribution Rejection
-
-Before calculating the curve's 50% level,
-the system checks how high the distribution
-peak is compared with the complete graph height.
-
-The current minimum requirement is:
-
-```text
-Peak Height ≥ 50% of graph plotting height
-```
-
-If the peak is lower than this threshold:
-
-```text
-Status: no_intersection
-50% Line: Not generated
-Intersections: 0
-Width: Not available
-```
-
-This prevents very low PLT distributions from
-producing misleading half-peak measurements.
-
----
-
-## Intersection Logic
-
-### No Intersection
-
-```text
-Intersections = 0
-Width = Not available
-```
-
-### One Intersection
-
-```text
-Intersections = 1
-Width = Not available
-```
-
-### Two Intersections
-
-```text
-Width =
-Right X - Left X
-```
-
-### More Than Two Intersections
-
-All genuine intersections are reported.
-
-For example:
-
-```text
-Point 1 = 4.82 fL
-Point 2 = 10.75 fL
-Point 3 = 31.40 fL
-```
-
-The width is:
-
-```text
-31.40 - 4.82
-=
-26.58 fL
-```
-
-Therefore:
-
-```text
-Width =
-Maximum X intersection
--
-Minimum X intersection
-```
-
----
-
-## Model Architecture
-
-The application uses a U-Net semantic
-segmentation model.
-
-The neural network is responsible only for:
-
-```text
-Input PLT Graph
-        ↓
-Curve Segmentation
-        ↓
-Detected PLT Curve
-```
-
-The model does not directly predict the
-50% intersection values.
-
----
-
-## Post-processing
-
-After segmentation, deterministic geometry
-is used for:
-
-- Graph boundary detection
-- Curve tracing
-- Peak detection
-- Low-distribution rejection
-- Half-peak calculation
-- Intersection detection
-- X-axis conversion to fL
-- Width calculation
-
----
-
-## Current Measurement Pipeline
-
-```text
-Upload PLT Graph
-        ↓
-U-Net Curve Segmentation
-        ↓
-Remove Axes / Reference Lines
-        ↓
-Trace PLT Distribution Curve
-        ↓
-Detect Distribution Peak
-        ↓
-Calculate Peak Height Relative to Graph
-        ↓
-Is Peak ≥ 50% of Graph Height?
-       / \
-     NO   YES
-     ↓      ↓
-No         Calculate 50%
-Measurement of Curve Peak
-            ↓
-       Find All Genuine
-       Intersections
-            ↓
-       Convert X → fL
-            ↓
-       Calculate Width
-       if 2+ points
-```
-
----
-
-## Project Structure
-
-```text
-PLT-Histogram-Analyzer/
-│
+PLT-Histogram-Analyzer-V8/
 ├── app.py
 ├── model.py
 ├── analyzer.py
 ├── preprocessing.py
 ├── requirements.txt
 ├── README.md
-│
 └── models/
-    └── plt_curve_unet_fixed50_best.pt
+    └── plt_roi_peak50_unet_v8_best.pt
 ```
 
----
+## 1. Replace the old project files
 
-## Important Note About Model Filename
+Copy these files into your existing Streamlit repository and replace the old versions:
 
-The checkpoint currently retains the filename:
+- `app.py`
+- `model.py`
+- `analyzer.py`
+- `preprocessing.py`
+- `requirements.txt`
+
+Create or update the `models/` folder.
+
+## 2. Add the downloaded V8 checkpoint
+
+Put your downloaded V8 best checkpoint here:
 
 ```text
-plt_curve_unet_fixed50_best.pt
+models/plt_roi_peak50_unet_v8_best.pt
 ```
 
-However, the U-Net checkpoint is used only
-for curve segmentation.
+The loader also accepts the legacy filename `plt_curve_unet_fixed50_best.pt` as a fallback, but using the explicit V8 filename is recommended.
 
-The current 50% measurement calculation is
-performed inside:
-
-```text
-analyzer.py
-```
-
-and uses:
-
-```text
-50% of detected curve peak
-```
-
-rather than a fixed 50% Y-axis position.
-
-Therefore retraining the segmentation model
-is not required for this measurement-logic change.
-
----
-
-## Technologies
-
-- Python
-- PyTorch
-- Streamlit
-- OpenCV
-- NumPy
-- Pandas
-- SciPy
-- Pillow
-
----
-
-## Running Locally
-
-Install dependencies:
+## 3. Run locally
 
 ```bash
 pip install -r requirements.txt
-```
-
-Start Streamlit:
-
-```bash
 streamlit run app.py
 ```
 
----
+## 4. Deploy on Streamlit
 
-## Streamlit Deployment
+Commit/push the updated Python files, `requirements.txt`, and the checkpoint under `models/`.
 
-The project can be deployed using
-Streamlit Community Cloud.
-
-Connect the GitHub repository and choose:
+In Streamlit deployment settings, use:
 
 ```text
 app.py
 ```
 
-as the main application file.
+No Colab/Google Drive code is required in the deployed application.
 
-Streamlit will automatically install
-the packages listed in:
+## 5. X-axis input
 
-```text
-requirements.txt
+The current V8 model does not perform OCR for the numerical x-axis ticks. The user therefore enters the graph's x-axis minimum and maximum in the sidebar.
+
+The detected dashed ROI is mapped linearly to that supplied range.
+
+## 6. Important debugging behavior
+
+The old ROI bug came from inconsistent reference-line return handling. V8 uses a single dictionary return structure:
+
+```python
+ref["left_x"]
+ref["right_x"]
 ```
 
-and start the application.
-
----
-
-## Input Requirements
-
-Upload a cropped PLT histogram.
-
-For better detection, the image should contain:
-
-- Complete X-axis
-- Complete Y-axis
-- Complete histogram distribution
-- Clear curve
-- Minimal surrounding report content
-
-Supported formats:
+The code never attempts to convert the string key `"left_x"` into an integer. This prevents the former:
 
 ```text
-PNG
-JPG
-JPEG
-WEBP
+ERROR: invalid literal for int() with base 10: 'left_x'
 ```
 
----
-
-## X-Axis Support
-
-The application currently supports:
-
-```text
-0–40 fL
-```
-
-and:
-
-```text
-0–30 fL
-```
-
-The correct range should be selected before
-performing analysis.
-
----
-
-## Curve Detection Sensitivity
-
-The Curve Detection Sensitivity controls how
-confident the U-Net must be before a pixel is
-accepted as part of the PLT curve.
-
-Lower values detect fainter curves but may
-include additional noise.
-
-Higher values require clearer curve pixels
-but may miss faint curve sections.
-
----
-
-## Output
-
-The system provides:
-
-- Distribution status
-- Detected peak height
-- Half-peak measurement level
-- Number of genuine intersections
-- Individual intersection X values
-- Minimum X
-- Maximum X
-- Width at 50%
-- Annotated graph
-- Curve support information
-- Detailed JSON result
-
----
-
-## Disclaimer
-
-This application is a research prototype for
-automated PLT histogram graph analysis.
-
-It is not intended for medical diagnosis,
-treatment recommendations, or clinical decisions.
+error.
