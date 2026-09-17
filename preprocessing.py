@@ -1,155 +1,207 @@
-# ============================================================
-# preprocessing.py
-# ============================================================
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
-import torch
+from PIL import Image
 
 
 # ============================================================
-# Convert input to RGB NumPy image
+# IMAGE READING
 # ============================================================
 
-def read_rgb_image(image):
+def read_rgb(
+    image_input: Any,
+) -> np.ndarray:
+    """
+    Convert supported image input formats into
+    RGB uint8 HxWx3.
+    """
 
-    if image is None:
+    # --------------------------------------------------------
+    # File path
+    # --------------------------------------------------------
 
-        raise ValueError(
-            "No image was provided."
+    if isinstance(
+        image_input,
+        (str, Path),
+    ):
+
+        bgr = cv2.imread(
+            str(image_input),
+            cv2.IMREAD_COLOR,
         )
 
-    # PIL Image
-    if hasattr(image, "convert"):
+        if bgr is None:
 
-        image = image.convert(
-            "RGB"
+            raise FileNotFoundError(
+                str(image_input)
+            )
+
+        rgb = cv2.cvtColor(
+            bgr,
+            cv2.COLOR_BGR2RGB,
         )
+
+    # --------------------------------------------------------
+    # PIL image
+    # --------------------------------------------------------
+
+    elif isinstance(
+        image_input,
+        Image.Image,
+    ):
 
         rgb = np.asarray(
-            image
-        ).copy()
+            image_input.convert("RGB")
+        )
 
-    # NumPy image
+    # --------------------------------------------------------
+    # Raw bytes
+    # --------------------------------------------------------
+
+    elif isinstance(
+        image_input,
+        (bytes, bytearray),
+    ):
+
+        arr = np.frombuffer(
+            image_input,
+            dtype=np.uint8,
+        )
+
+        bgr = cv2.imdecode(
+            arr,
+            cv2.IMREAD_COLOR,
+        )
+
+        if bgr is None:
+
+            raise ValueError(
+                "The uploaded file could not "
+                "be decoded as an image."
+            )
+
+        rgb = cv2.cvtColor(
+            bgr,
+            cv2.COLOR_BGR2RGB,
+        )
+
+    # --------------------------------------------------------
+    # File-like object
+    # --------------------------------------------------------
+
+    elif hasattr(
+        image_input,
+        "read",
+    ):
+
+        data = image_input.read()
+
+        if hasattr(
+            image_input,
+            "seek",
+        ):
+
+            try:
+
+                image_input.seek(0)
+
+            except Exception:
+
+                pass
+
+        return read_rgb(data)
+
+    # --------------------------------------------------------
+    # NumPy
+    # --------------------------------------------------------
+
     else:
 
         rgb = np.asarray(
-            image
-        ).copy()
+            image_input
+        )
 
-        if rgb.ndim != 3:
+        if rgb.ndim == 2:
 
-            raise ValueError(
-                "Expected an RGB image."
+            rgb = cv2.cvtColor(
+                rgb.astype(np.uint8),
+                cv2.COLOR_GRAY2RGB,
             )
 
-        if rgb.shape[2] == 4:
+        elif (
+            rgb.ndim == 3
+            and rgb.shape[2] == 4
+        ):
 
             rgb = rgb[:, :, :3]
 
-    if rgb.dtype != np.uint8:
+    # --------------------------------------------------------
+    # Validate
+    # --------------------------------------------------------
 
-        rgb = np.clip(
-            rgb,
-            0,
-            255
-        ).astype(
-            np.uint8
+    if (
+        rgb.ndim != 3
+        or rgb.shape[2] != 3
+    ):
+
+        raise ValueError(
+            "Expected an RGB image, "
+            f"received shape {rgb.shape}."
         )
 
-    return rgb
+    return np.clip(
+        rgb,
+        0,
+        255,
+    ).astype(np.uint8)
 
 
 # ============================================================
-# Prepare input tensor
+# RESIZE
 # ============================================================
 
-def prepare_input(
-    rgb,
-    image_size=512
-):
+def resize_for_model(
+    rgb: np.ndarray,
+    image_size: int = 512,
+) -> np.ndarray:
 
-    resized = cv2.resize(
+    return cv2.resize(
         rgb,
         (
             image_size,
-            image_size
+            image_size,
         ),
-        interpolation=cv2.INTER_AREA
+        interpolation=cv2.INTER_AREA,
     )
 
-    normalized = (
-        resized.astype(
-            np.float32
-        ) / 255.0
+
+# ============================================================
+# NORMALIZE
+# ============================================================
+
+def normalize_tensor(
+    rgb: np.ndarray,
+    image_size: int = 512,
+):
+
+    import torch
+
+    resized = resize_for_model(
+        rgb,
+        image_size,
+    )
+
+    x = (
+        resized.astype(np.float32)
+        / 255.0
     )
 
     tensor = torch.from_numpy(
-        normalized.transpose(
-            2,
-            0,
-            1
-        )
-    ).unsqueeze(
-        0
-    ).float()
+        x.transpose(2, 0, 1)
+    ).unsqueeze(0).float()
 
     return tensor
-
-
-# ============================================================
-# Restore prediction to original dimensions
-# ============================================================
-
-def restore_probability(
-    probability,
-    width,
-    height
-):
-
-    return cv2.resize(
-        probability,
-        (
-            width,
-            height
-        ),
-        interpolation=cv2.INTER_LINEAR
-    )
-
-
-# ============================================================
-# Convert probability to mask
-# ============================================================
-
-def probability_to_mask(
-    probability,
-    threshold=0.35
-):
-
-    mask = (
-        probability >= threshold
-    ).astype(
-        np.uint8
-    )
-
-    kernel = np.ones(
-        (
-            3,
-            3
-        ),
-        dtype=np.uint8
-    )
-
-    mask = cv2.morphologyEx(
-        mask,
-        cv2.MORPH_OPEN,
-        kernel
-    )
-
-    mask = cv2.morphologyEx(
-        mask,
-        cv2.MORPH_CLOSE,
-        kernel
-    )
-
-    return mask
