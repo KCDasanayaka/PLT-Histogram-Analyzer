@@ -10,14 +10,14 @@ from analyzer import (
     analyze_plt_image,
     annotate_result,
     make_result_table,
-    SENSITIVITY_PRESETS,
+    get_sensitivity_description,
 )
 
 from model import load_model
 
 
 # ============================================================
-# PAGE
+# PAGE CONFIGURATION
 # ============================================================
 
 st.set_page_config(
@@ -28,7 +28,7 @@ st.set_page_config(
 
 
 # ============================================================
-# MODEL
+# PROJECT / MODEL PATH
 # ============================================================
 
 PROJECT_DIR = (
@@ -37,6 +37,7 @@ PROJECT_DIR = (
     .parent
 )
 
+# User renamed the checkpoint using the second method.
 MODEL_PATH = (
     PROJECT_DIR
     / "models"
@@ -44,17 +45,25 @@ MODEL_PATH = (
 )
 
 
+# ============================================================
+# HEADER
+# ============================================================
+
 st.title(
     "PLT Histogram Analyzer"
 )
 
 st.caption(
-    "V8 ROI-based PLT 50% width analyzer"
+    "V9 — ROI-based 50% curve measurement with manual X-axis calibration"
 )
 
 
+# ============================================================
+# MODEL LOADING
+# ============================================================
+
 @st.cache_resource(
-    show_spinner="Loading model..."
+    show_spinner="Loading PLT model..."
 )
 def get_model():
 
@@ -72,12 +81,12 @@ try:
 except Exception as exc:
 
     st.error(
-        f"Model loading failed: "
+        "Model loading failed:\n\n"
         f"{type(exc).__name__}: {exc}"
     )
 
     st.info(
-        "Expected model:\n\n"
+        "Expected model file:\n\n"
         "`models/plt_roi_peak50_unet_v8_best.pt`"
     )
 
@@ -85,7 +94,27 @@ except Exception as exc:
 
 
 # ============================================================
-# SIDEBAR
+# IMAGE UPLOAD
+# ============================================================
+
+uploaded = st.file_uploader(
+    "Upload a PLT graph image",
+    type=[
+        "png",
+        "jpg",
+        "jpeg",
+        "webp",
+    ],
+    help=(
+        "Upload the original PLT graph image. "
+        "The graph should contain the two vertical dashed "
+        "ROI boundaries and its horizontal X-axis."
+    ),
+)
+
+
+# ============================================================
+# SIDEBAR — ANALYSIS SETTINGS
 # ============================================================
 
 with st.sidebar:
@@ -95,87 +124,44 @@ with st.sidebar:
     )
 
     # --------------------------------------------------------
-    # Sensitivity preset
+    # MANUAL SENSITIVITY
     # --------------------------------------------------------
 
-    sensitivity = st.selectbox(
-        "Curve detection sensitivity",
-        options=list(
-            SENSITIVITY_PRESETS.keys()
-        ),
-        index=1,
-        help=(
-            "Use High or Very High for faint/low-visibility "
-            "curves. Higher sensitivity can also increase "
-            "noise, so review the annotated result."
-        ),
+    st.markdown(
+        "**Curve detection sensitivity**"
     )
 
-    preset_threshold = SENSITIVITY_PRESETS[
-        sensitivity
-    ][
-        "threshold"
-    ]
-
-    # --------------------------------------------------------
-    # Fine tuning
-    # --------------------------------------------------------
-
-    threshold = st.slider(
-        "Fine-tune curve sensitivity",
-        min_value=0.08,
-        max_value=0.45,
-        value=float(
-            preset_threshold
-        ),
+    sensitivity_threshold = st.slider(
+        "Sensitivity threshold",
+        min_value=0.05,
+        max_value=0.50,
+        value=0.22,
         step=0.01,
         help=(
-            "Lower threshold = higher sensitivity. "
-            "Increase sensitivity for faint curves."
+            "Lower value = higher sensitivity. "
+            "Use a lower value for faint or low-visibility curves. "
+            "Use a higher value when the graph contains noise."
         ),
     )
 
     st.caption(
-        f"Current threshold: `{threshold:.2f}`"
+        f"Current threshold: `{sensitivity_threshold:.2f}`"
     )
+
+    st.caption(
+        get_sensitivity_description(
+            sensitivity_threshold
+        )
+    )
+
+    # --------------------------------------------------------
+    # Y AXIS
+    # --------------------------------------------------------
 
     st.markdown("---")
 
-    # --------------------------------------------------------
-    # X axis
-    # --------------------------------------------------------
-
     st.subheader(
-        "X-axis range"
-    )
-
-    x_min = st.number_input(
-        "X-axis minimum (fL)",
-        min_value=-1000.0,
-        max_value=10000.0,
-        value=0.0,
-        step=1.0,
-    )
-
-    x_max = st.number_input(
-        "X-axis maximum (fL)",
-        min_value=-1000.0,
-        max_value=10000.0,
-        value=40.0,
-        step=1.0,
-    )
-
-    st.caption(
-        "Enter the actual numerical range shown by the graph. "
-        "The application no longer tries to recognize 10/20/30/40 labels."
-    )
-
-    # --------------------------------------------------------
-    # Y axis
-    # --------------------------------------------------------
-
-    st.subheader(
-        "Y-axis range"
+        "Y-axis"
     )
 
     y_max = st.number_input(
@@ -184,7 +170,15 @@ with st.sidebar:
         max_value=10000.0,
         value=10.0,
         step=0.5,
+        help=(
+            "Maximum numerical value represented at "
+            "the top of the plotting area."
+        ),
     )
+
+    # --------------------------------------------------------
+    # MODEL INFO
+    # --------------------------------------------------------
 
     st.markdown("---")
 
@@ -202,28 +196,37 @@ with st.sidebar:
 
 
 # ============================================================
-# IMAGE UPLOAD
-# ============================================================
-
-uploaded = st.file_uploader(
-    "Upload a PLT graph image",
-    type=[
-        "png",
-        "jpg",
-        "jpeg",
-        "webp",
-    ],
-)
-
-
-# ============================================================
-# MAIN
+# MAIN APP
 # ============================================================
 
 if uploaded is None:
 
     st.info(
         "Upload a PLT graph image to begin."
+    )
+
+    st.markdown(
+        """
+### How to calibrate the X-axis
+
+After uploading the graph, place the two calibration
+positions on the **actual horizontal X-axis**:
+
+- X-axis minimum position = where the numerical X-axis starts
+- X-axis maximum position = where the numerical X-axis ends
+
+These are separate from the green ROI boundaries.
+
+For a 0–40 fL graph, the application then mathematically
+reconstructs:
+
+`0 → 10 → 20 → 30 → 40 fL`
+
+between those manually selected endpoints.
+
+No OCR or automatic recognition of the printed 10/20/30/40
+numbers is used.
+        """
     )
 
 else:
@@ -238,84 +241,279 @@ else:
             "RGB"
         )
 
+        image_width = image.width
+        image_height = image.height
+
         st.image(
             image,
-            caption="Uploaded PLT graph",
+            caption=(
+                f"Uploaded graph — "
+                f"{image_width} × {image_height}px"
+            ),
             use_container_width=True,
         )
 
+        # ====================================================
+        # MANUAL X-AXIS CALIBRATION
+        # ====================================================
+
+        st.subheader(
+            "Manual X-axis calibration"
+        )
+
+        st.info(
+            "Set the two positions on the real horizontal "
+            "X-axis. Do NOT use the green ROI boundaries unless "
+            "they actually coincide with the numerical X-axis endpoints."
+        )
+
+        calibration_col1, calibration_col2 = st.columns(
+            2
+        )
+
         # ----------------------------------------------------
-        # Settings summary
+        # Defaults
+        #
+        # These are ONLY starting values.
+        # They are not an automatic axis detector.
+        # ----------------------------------------------------
+
+        default_axis_start = max(
+            0,
+            int(
+                round(
+                    image_width
+                    * 0.08
+                )
+            ),
+        )
+
+        default_axis_end = min(
+            image_width - 1,
+            int(
+                round(
+                    image_width
+                    * 0.88
+                )
+            ),
+        )
+
+        with calibration_col1:
+
+            x_axis_start_px = st.number_input(
+                "X-axis minimum position (px)",
+                min_value=0,
+                max_value=image_width - 1,
+                value=default_axis_start,
+                step=1,
+                help=(
+                    "Pixel position where the numerical "
+                    "X-axis starts."
+                ),
+            )
+
+        with calibration_col2:
+
+            x_axis_end_px = st.number_input(
+                "X-axis maximum position (px)",
+                min_value=0,
+                max_value=image_width - 1,
+                value=default_axis_end,
+                step=1,
+                help=(
+                    "Pixel position where the numerical "
+                    "X-axis ends."
+                ),
+            )
+
+        # ----------------------------------------------------
+        # Numerical X-axis
         # ----------------------------------------------------
 
         st.markdown(
-            "### Selected settings"
+            "**Numerical X-axis range**"
         )
 
-        c1, c2, c3 = st.columns(
+        x_col1, x_col2 = st.columns(
+            2
+        )
+
+        with x_col1:
+
+            x_min = st.number_input(
+                "X-axis minimum (fL)",
+                min_value=-1000.0,
+                max_value=10000.0,
+                value=0.0,
+                step=1.0,
+            )
+
+        with x_col2:
+
+            x_max = st.number_input(
+                "X-axis maximum (fL)",
+                min_value=-1000.0,
+                max_value=10000.0,
+                value=40.0,
+                step=1.0,
+            )
+
+        # ----------------------------------------------------
+        # Calibration preview
+        # ----------------------------------------------------
+
+        if (
+            x_axis_end_px
+            <= x_axis_start_px
+        ):
+
+            st.error(
+                "X-axis maximum position must be greater "
+                "than X-axis minimum position."
+            )
+
+            axis_valid = False
+
+        else:
+
+            axis_valid = True
+
+        if (
+            x_max
+            <= x_min
+        ):
+
+            st.error(
+                "X-axis maximum value must be greater "
+                "than X-axis minimum value."
+            )
+
+            axis_valid = False
+
+        if (
+            y_max
+            <= 0
+        ):
+
+            st.error(
+                "Y-axis maximum must be greater than 0."
+            )
+
+            axis_valid = False
+
+        # ----------------------------------------------------
+        # Show calibration values
+        # ----------------------------------------------------
+
+        if axis_valid:
+
+            st.caption(
+                (
+                    f"Manual calibration: "
+                    f"{x_axis_start_px}px → {x_min:g} fL    |    "
+                    f"{x_axis_end_px}px → {x_max:g} fL"
+                )
+            )
+
+            # Mathematical reconstruction of expected
+            # major ticks. These are NOT detected from the image.
+            major_tick_values = []
+
+            start_10 = int(
+                __import__(
+                    "math"
+                ).ceil(
+                    x_min / 10.0
+                )
+                * 10
+            )
+
+            end_10 = int(
+                __import__(
+                    "math"
+                ).floor(
+                    x_max / 10.0
+                )
+                * 10
+            )
+
+            if end_10 >= start_10:
+
+                major_tick_values = list(
+                    range(
+                        start_10,
+                        end_10 + 1,
+                        10,
+                    )
+                )
+
+            st.caption(
+                (
+                    "Reconstructed major ticks: "
+                    + (
+                        ", ".join(
+                            f"{v:g} fL"
+                            for v in major_tick_values
+                        )
+                        if major_tick_values
+                        else "None"
+                    )
+                )
+            )
+
+        # ====================================================
+        # SELECTED SETTINGS SUMMARY
+        # ====================================================
+
+        st.markdown(
+            "---"
+        )
+
+        st.subheader(
+            "Selected analysis settings"
+        )
+
+        s1, s2, s3 = st.columns(
             3
         )
 
-        with c1:
+        with s1:
 
             st.metric(
                 "Sensitivity",
-                sensitivity,
+                f"{sensitivity_threshold:.2f}",
             )
 
-        with c2:
+        with s2:
 
             st.metric(
                 "X-axis",
                 f"{x_min:g} – {x_max:g} fL",
             )
 
-        with c3:
+        with s3:
 
             st.metric(
-                "Y-axis maximum",
+                "Y max",
                 f"{y_max:g} fL",
             )
 
-        # ----------------------------------------------------
-        # Validation
-        # ----------------------------------------------------
+        # ====================================================
+        # ANALYZE
+        # ====================================================
 
-        valid = True
-
-        if x_max <= x_min:
-
-            st.error(
-                "X-axis maximum must be greater "
-                "than X-axis minimum."
-            )
-
-            valid = False
-
-        if y_max <= 0:
-
-            st.error(
-                "Y-axis maximum must be greater than 0."
-            )
-
-            valid = False
-
-        # ----------------------------------------------------
-        # Analyze
-        # ----------------------------------------------------
-
-        analyze = st.button(
+        analyze_button = st.button(
             "Analyze graph",
             type="primary",
             use_container_width=True,
-            disabled=not valid,
+            disabled=not axis_valid,
         )
 
-        if analyze:
+        if analyze_button:
 
             with st.spinner(
-                "Detecting ROI, locating the X-axis, "
-                "enhancing the curve and calculating 50% intersections..."
+                "Detecting ROI, enhancing the curve, "
+                "tracing the graph and calculating 50% intersections..."
             ):
 
                 result = analyze_plt_image(
@@ -325,16 +523,17 @@ else:
                     x_min_fl=x_min,
                     x_max_fl=x_max,
                     y_max_fl=y_max,
-                    threshold=threshold,
-                    sensitivity_name=sensitivity,
+                    threshold=sensitivity_threshold,
+                    manual_axis_start_px=x_axis_start_px,
+                    manual_axis_end_px=x_axis_end_px,
                 )
 
-            # ------------------------------------------------
-            # Annotation
-            # ------------------------------------------------
+            # =================================================
+            # ANNOTATION
+            # =================================================
 
             st.subheader(
-                "Detected graph"
+                "Analysis result"
             )
 
             annotated = annotate_result(
@@ -345,7 +544,8 @@ else:
                 annotated,
                 caption=(
                     "Green = ROI boundaries | "
-                    "Yellow/Cyan = actual X-axis endpoints | "
+                    "Yellow = manually calibrated X-axis | "
+                    "Yellow tick marks = reconstructed 10 fL spacing | "
                     "Orange = 50% level | "
                     "Magenta = peak | "
                     "Red = genuine intersections"
@@ -353,9 +553,9 @@ else:
                 use_container_width=True,
             )
 
-            # ------------------------------------------------
-            # Results
-            # ------------------------------------------------
+            # =================================================
+            # RESULT TABLE
+            # =================================================
 
             st.subheader(
                 "Measurement results"
@@ -369,9 +569,9 @@ else:
                 hide_index=True,
             )
 
-            # ------------------------------------------------
-            # Status
-            # ------------------------------------------------
+            # =================================================
+            # STATUS
+            # =================================================
 
             status = result.get(
                 "status"
@@ -389,95 +589,105 @@ else:
             elif status == "single_intersection":
 
                 st.warning(
-                    "Only one genuine 50% intersection "
-                    "was detected, so width is not calculated."
+                    (
+                        "Only one genuine 50% intersection "
+                        "was detected. Width is not calculated."
+                    )
                 )
 
             elif status == "no_intersection":
 
                 st.info(
-                    "The traced curve does not genuinely "
-                    "cross the 50% level inside the ROI."
+                    (
+                        "The tracked curve does not genuinely "
+                        "cross the 50% level inside the ROI."
+                    )
                 )
 
             elif status == "curve_not_found":
 
                 st.error(
-                    "The curve could not be reliably traced. "
-                    "Try High or Very High sensitivity."
+                    (
+                        "A reliable curve trace could not be "
+                        "established. Try lowering the sensitivity "
+                        "threshold."
+                    )
                 )
 
             elif status == "roi_not_found":
 
                 st.error(
-                    "The two dashed ROI boundaries "
-                    "could not be detected."
+                    (
+                        "The two vertical dashed ROI boundaries "
+                        "could not be detected."
+                    )
                 )
 
             elif status == "peak_not_found":
 
                 st.error(
-                    "A reliable curve peak could not be detected."
+                    (
+                        "A reliable curve peak could not be detected."
+                    )
                 )
 
             else:
 
-                warning = result.get(
+                if result.get(
                     "warning"
-                )
-
-                if warning:
+                ):
 
                     st.warning(
-                        warning
+                        result[
+                            "warning"
+                        ]
                     )
 
-            # ------------------------------------------------
-            # Axis debug information
-            # ------------------------------------------------
+            # =================================================
+            # CALIBRATION DETAILS
+            # =================================================
 
             with st.expander(
-                "X-axis detection details"
+                "X-axis calibration details"
             ):
 
                 st.write(
-                    "Actual X-axis start pixel:",
+                    "Manual X-axis start:",
                     result.get(
                         "x_axis_start_px"
                     ),
+                    "px",
+                    "→",
+                    f"{x_min:g} fL",
                 )
 
                 st.write(
-                    "Actual X-axis end pixel:",
+                    "Manual X-axis end:",
                     result.get(
                         "x_axis_end_px"
                     ),
+                    "px",
+                    "→",
+                    f"{x_max:g} fL",
                 )
 
                 st.write(
-                    "X-axis Y pixel:",
+                    "Pixels per fL:",
                     result.get(
-                        "x_axis_y_px"
+                        "pixels_per_fl"
                     ),
                 )
 
                 st.write(
-                    "X-axis detection method:",
+                    "Calibration method:",
                     result.get(
                         "x_axis_method"
                     ),
                 )
 
-                st.write(
-                    "X-axis confidence:",
-                    result.get(
-                        "x_axis_confidence"
-                    ),
-                )
-
-            # ------------------------------------------------
-            # Detailed output
-            # ------------------------------------------------
+            # =================================================
+            # DETAILED OUTPUT
+            # =================================================
 
             with st.expander(
                 "Detailed analysis output"
@@ -504,5 +714,8 @@ else:
     except Exception as exc:
 
         st.error(
-            f"ERROR: {type(exc).__name__}: {exc}"
-        ) 
+            (
+                f"ERROR: "
+                f"{type(exc).__name__}: {exc}"
+            )
+        )
