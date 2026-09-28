@@ -28,12 +28,14 @@ st.set_page_config(
 
 
 # ============================================================
-# MODEL PATH
+# MODEL
 # ============================================================
 
-PROJECT_DIR = Path(
-    __file__
-).resolve().parent
+PROJECT_DIR = (
+    Path(__file__)
+    .resolve()
+    .parent
+)
 
 MODEL_PATH = (
     PROJECT_DIR
@@ -42,25 +44,17 @@ MODEL_PATH = (
 )
 
 
-# ============================================================
-# HEADER
-# ============================================================
-
 st.title(
     "PLT Histogram Analyzer"
 )
 
 st.caption(
-    "V8 ROI-based peak and 50% intersection measurement"
+    "V8 ROI-based PLT 50% width analyzer"
 )
 
 
-# ============================================================
-# LOAD MODEL
-# ============================================================
-
 @st.cache_resource(
-    show_spinner="Loading V8 model..."
+    show_spinner="Loading model..."
 )
 def get_model():
 
@@ -83,7 +77,7 @@ except Exception as exc:
     )
 
     st.info(
-        "Make sure the renamed checkpoint exists at:\n\n"
+        "Expected model:\n\n"
         "`models/plt_roi_peak50_unet_v8_best.pt`"
     )
 
@@ -101,7 +95,7 @@ with st.sidebar:
     )
 
     # --------------------------------------------------------
-    # Sensitivity
+    # Sensitivity preset
     # --------------------------------------------------------
 
     sensitivity = st.selectbox(
@@ -111,29 +105,48 @@ with st.sidebar:
         ),
         index=1,
         help=(
-            "Low = more conservative. "
-            "Medium = balanced. "
-            "High = more sensitive to weaker curve responses."
+            "Use High or Very High for faint/low-visibility "
+            "curves. Higher sensitivity can also increase "
+            "noise, so review the annotated result."
         ),
     )
 
-    threshold = SENSITIVITY_PRESETS[
+    preset_threshold = SENSITIVITY_PRESETS[
         sensitivity
+    ][
+        "threshold"
     ]
 
+    # --------------------------------------------------------
+    # Fine tuning
+    # --------------------------------------------------------
+
+    threshold = st.slider(
+        "Fine-tune curve sensitivity",
+        min_value=0.08,
+        max_value=0.45,
+        value=float(
+            preset_threshold
+        ),
+        step=0.01,
+        help=(
+            "Lower threshold = higher sensitivity. "
+            "Increase sensitivity for faint curves."
+        ),
+    )
+
     st.caption(
-        f"Segmentation threshold: "
-        f"{threshold:.2f}"
+        f"Current threshold: `{threshold:.2f}`"
     )
 
     st.markdown("---")
 
     # --------------------------------------------------------
-    # X AXIS
+    # X axis
     # --------------------------------------------------------
 
     st.subheader(
-        "X-axis"
+        "X-axis range"
     )
 
     x_min = st.number_input(
@@ -152,12 +165,17 @@ with st.sidebar:
         step=1.0,
     )
 
+    st.caption(
+        "Enter the actual numerical range shown by the graph. "
+        "The application no longer tries to recognize 10/20/30/40 labels."
+    )
+
     # --------------------------------------------------------
-    # Y AXIS
+    # Y axis
     # --------------------------------------------------------
 
     st.subheader(
-        "Y-axis"
+        "Y-axis range"
     )
 
     y_max = st.number_input(
@@ -166,25 +184,16 @@ with st.sidebar:
         max_value=10000.0,
         value=10.0,
         step=0.5,
-        help=(
-            "Maximum numerical Y-axis value represented "
-            "at the top of the plotting area."
-        ),
     )
 
     st.markdown("---")
-
-    # --------------------------------------------------------
-    # MODEL INFO
-    # --------------------------------------------------------
 
     st.subheader(
         "Model"
     )
 
     st.write(
-        f"Checkpoint: "
-        f"`{checkpoint_path.name}`"
+        f"Checkpoint: `{checkpoint_path.name}`"
     )
 
     st.write(
@@ -193,7 +202,7 @@ with st.sidebar:
 
 
 # ============================================================
-# UPLOAD
+# IMAGE UPLOAD
 # ============================================================
 
 uploaded = st.file_uploader(
@@ -204,10 +213,6 @@ uploaded = st.file_uploader(
         "jpeg",
         "webp",
     ],
-    help=(
-        "Upload the graph containing the two "
-        "vertical dashed reference boundaries."
-    ),
 )
 
 
@@ -215,35 +220,36 @@ uploaded = st.file_uploader(
 # MAIN
 # ============================================================
 
-if uploaded is not None:
+if uploaded is None:
+
+    st.info(
+        "Upload a PLT graph image to begin."
+    )
+
+else:
 
     try:
 
-        image_bytes = (
-            uploaded.getvalue()
-        )
-
-        pil_image = (
-            Image.open(
-                io.BytesIO(
-                    image_bytes
-                )
+        image = Image.open(
+            io.BytesIO(
+                uploaded.getvalue()
             )
-            .convert("RGB")
+        ).convert(
+            "RGB"
         )
 
         st.image(
-            pil_image,
+            image,
             caption="Uploaded PLT graph",
             use_container_width=True,
         )
 
         # ----------------------------------------------------
-        # Selected settings
+        # Settings summary
         # ----------------------------------------------------
 
         st.markdown(
-            "### Selected analysis settings"
+            "### Selected settings"
         )
 
         c1, c2, c3 = st.columns(
@@ -272,10 +278,10 @@ if uploaded is not None:
             )
 
         # ----------------------------------------------------
-        # Validate
+        # Validation
         # ----------------------------------------------------
 
-        valid_input = True
+        valid = True
 
         if x_max <= x_min:
 
@@ -284,7 +290,7 @@ if uploaded is not None:
                 "than X-axis minimum."
             )
 
-            valid_input = False
+            valid = False
 
         if y_max <= 0:
 
@@ -292,55 +298,54 @@ if uploaded is not None:
                 "Y-axis maximum must be greater than 0."
             )
 
-            valid_input = False
+            valid = False
 
         # ----------------------------------------------------
         # Analyze
         # ----------------------------------------------------
 
-        analyze_button = st.button(
+        analyze = st.button(
             "Analyze graph",
             type="primary",
             use_container_width=True,
-            disabled=not valid_input,
+            disabled=not valid,
         )
 
-        if analyze_button:
+        if analyze:
 
             with st.spinner(
-                "Detecting ROI, calibrating X-axis, "
-                "tracing curve and calculating 50% intersections..."
+                "Detecting ROI, locating the X-axis, "
+                "enhancing the curve and calculating 50% intersections..."
             ):
 
                 result = analyze_plt_image(
                     model=model,
                     device=device,
-                    image_input=pil_image,
+                    image_input=image,
                     x_min_fl=x_min,
                     x_max_fl=x_max,
                     y_max_fl=y_max,
                     threshold=threshold,
+                    sensitivity_name=sensitivity,
                 )
 
             # ------------------------------------------------
-            # Annotated result
+            # Annotation
             # ------------------------------------------------
 
             st.subheader(
                 "Detected graph"
             )
 
-            annotated = (
-                annotate_result(
-                    result
-                )
+            annotated = annotate_result(
+                result
             )
 
             st.image(
                 annotated,
                 caption=(
                     "Green = ROI boundaries | "
-                    "Cyan = detected X-axis ticks | "
+                    "Yellow/Cyan = actual X-axis endpoints | "
                     "Orange = 50% level | "
                     "Magenta = peak | "
                     "Red = genuine intersections"
@@ -349,7 +354,7 @@ if uploaded is not None:
             )
 
             # ------------------------------------------------
-            # Table
+            # Results
             # ------------------------------------------------
 
             st.subheader(
@@ -365,73 +370,54 @@ if uploaded is not None:
             )
 
             # ------------------------------------------------
-            # Status message
+            # Status
             # ------------------------------------------------
 
             status = result.get(
                 "status"
             )
 
-            if (
-                status
-                == "measure_width"
-            ):
+            if status == "measure_width":
 
                 st.success(
                     (
-                        "Width at 50%: "
+                        f"Width at 50%: "
                         f"{result['width_50_fl']:.3f} fL"
                     )
                 )
 
-            elif (
-                status
-                == "single_intersection"
-            ):
+            elif status == "single_intersection":
 
                 st.warning(
                     "Only one genuine 50% intersection "
                     "was detected, so width is not calculated."
                 )
 
-            elif (
-                status
-                == "no_intersection"
-            ):
+            elif status == "no_intersection":
 
                 st.info(
                     "The traced curve does not genuinely "
                     "cross the 50% level inside the ROI."
                 )
 
-            elif (
-                status
-                == "roi_not_found"
-            ):
+            elif status == "curve_not_found":
 
                 st.error(
-                    "The two vertical dashed ROI boundaries "
-                    "could not be detected reliably."
+                    "The curve could not be reliably traced. "
+                    "Try High or Very High sensitivity."
                 )
 
-            elif (
-                status
-                == "curve_not_found"
-            ):
+            elif status == "roi_not_found":
 
                 st.error(
-                    "A reliable curve trace could not "
-                    "be found inside the ROI."
+                    "The two dashed ROI boundaries "
+                    "could not be detected."
                 )
 
-            elif (
-                status
-                == "peak_not_found"
-            ):
+            elif status == "peak_not_found":
 
                 st.error(
-                    "A reliable curve peak could not "
-                    "be detected."
+                    "A reliable curve peak could not be detected."
                 )
 
             else:
@@ -447,70 +433,76 @@ if uploaded is not None:
                     )
 
             # ------------------------------------------------
-            # Debug information
+            # Axis debug information
             # ------------------------------------------------
 
             with st.expander(
-                "X-axis calibration details"
+                "X-axis detection details"
             ):
 
-                calibration = (
+                st.write(
+                    "Actual X-axis start pixel:",
                     result.get(
-                        "x_axis_calibration"
-                    )
-                    or {}
-                )
-
-                st.write(
-                    "Calibration method:",
-                    calibration.get(
-                        "method"
+                        "x_axis_start_px"
                     ),
                 )
 
                 st.write(
-                    "Detected tick pixels:",
+                    "Actual X-axis end pixel:",
                     result.get(
-                        "x_tick_positions_px"
+                        "x_axis_end_px"
                     ),
                 )
 
                 st.write(
-                    "Detected tick values:",
+                    "X-axis Y pixel:",
                     result.get(
-                        "x_tick_values_fl"
+                        "x_axis_y_px"
                     ),
                 )
 
                 st.write(
-                    "Pixels per 10 fL:",
-                    calibration.get(
-                        "pixels_per_10fl"
+                    "X-axis detection method:",
+                    result.get(
+                        "x_axis_method"
                     ),
                 )
 
                 st.write(
-                    "Calibration confidence:",
-                    calibration.get(
-                        "confidence"
+                    "X-axis confidence:",
+                    result.get(
+                        "x_axis_confidence"
                     ),
                 )
 
-                st.write(
-                    "Candidate tick pixels:",
-                    calibration.get(
-                        "tick_candidates_px"
-                    ),
+            # ------------------------------------------------
+            # Detailed output
+            # ------------------------------------------------
+
+            with st.expander(
+                "Detailed analysis output"
+            ):
+
+                filtered = {
+                    key: value
+                    for key, value in result.items()
+                    if key not in {
+                        "image_rgb",
+                        "curve_probability",
+                        "visual_curve_score",
+                        "curve_mask",
+                        "centerline_x",
+                        "centerline_y",
+                        "centerline_confidence",
+                    }
+                }
+
+                st.json(
+                    filtered
                 )
 
     except Exception as exc:
 
         st.error(
             f"ERROR: {type(exc).__name__}: {exc}"
-        )
-
-else:
-
-    st.info(
-        "Upload a PLT graph image to begin."
-    )
+        ) 
