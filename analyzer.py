@@ -37,44 +37,76 @@ def get_sensitivity_description(
     if threshold <= 0.12:
 
         return (
-            "Very high sensitivity — useful for extremely faint "
-            "curves, but more background noise may be included."
+            "Very high sensitivity"
         )
 
     if threshold <= 0.18:
 
         return (
-            "High sensitivity — recommended for weak-visibility "
-            "curves."
+            "High sensitivity"
         )
 
     if threshold <= 0.28:
 
         return (
-            "Balanced sensitivity — recommended starting point."
+            "Medium sensitivity"
         )
 
     if threshold <= 0.36:
 
         return (
-            "Conservative sensitivity — useful for cleaner graphs."
+            "Low sensitivity"
         )
 
     return (
-        "Very conservative sensitivity — weak curve pixels "
-        "may be rejected."
+        "Very conservative sensitivity"
     )
 
 
 # ============================================================
-# BASIC HELPERS
+# NORMALIZE
+# ============================================================
+
+def _norm(
+    values: np.ndarray,
+) -> np.ndarray:
+
+    values = np.asarray(
+        values,
+        dtype=np.float32,
+    )
+
+    if values.size == 0:
+
+        return np.zeros_like(
+            values
+        )
+
+    maximum = float(
+        values.max()
+    )
+
+    if maximum <= 1e-9:
+
+        return np.zeros_like(
+            values
+        )
+
+    return (
+        values
+        / maximum
+    )
+
+
+# ============================================================
+# VERTICAL RUN
 # ============================================================
 
 def _vertical_run_stats(
     binary_col: np.ndarray,
 ):
 
-    b = (
+    binary = (
         np.asarray(
             binary_col,
             dtype=np.uint8,
@@ -82,24 +114,26 @@ def _vertical_run_stats(
         > 0
     )
 
-    idx = np.flatnonzero(
-        b
+    indices = np.flatnonzero(
+        binary
     )
 
-    if idx.size == 0:
+    if indices.size == 0:
 
         return 0, 0, 0.0
 
-    starts = idx[
+    starts = indices[
         np.r_[
             True,
-            np.diff(idx) > 1,
+            np.diff(indices)
+            > 1,
         ]
     ]
 
-    ends = idx[
+    ends = indices[
         np.r_[
-            np.diff(idx) > 1,
+            np.diff(indices)
+            > 1,
             True,
         ]
     ]
@@ -121,36 +155,6 @@ def _vertical_run_stats(
             lengths.sum()
             / len(binary_col)
         ),
-    )
-
-
-def _norm(
-    v: np.ndarray,
-) -> np.ndarray:
-
-    v = np.asarray(
-        v,
-        dtype=np.float32,
-    )
-
-    if not v.size:
-
-        return np.zeros_like(
-            v
-        )
-
-    m = float(
-        v.max()
-    )
-
-    if m <= 1e-9:
-
-        return np.zeros_like(
-            v
-        )
-
-    return (
-        v / m
     )
 
 
@@ -185,18 +189,18 @@ def detect_reference_lines(
         0.975 * w
     )
 
-    g = gray[
+    crop = gray[
         y0:y1,
         x0:x1,
     ]
 
     q = np.percentile(
-        g,
+        crop,
         35,
     )
 
     dark = (
-        g
+        crop
         <= min(
             205,
             q + 15,
@@ -206,7 +210,7 @@ def detect_reference_lines(
     )
 
     raw = np.zeros(
-        g.shape[1],
+        crop.shape[1],
         np.float32,
     )
 
@@ -214,16 +218,12 @@ def detect_reference_lines(
         raw
     )
 
-    hough = np.zeros_like(
+    hough_score = np.zeros_like(
         raw
     )
 
-    # --------------------------------------------------------
-    # Vertical runs
-    # --------------------------------------------------------
-
     for x in range(
-        g.shape[1]
+        crop.shape[1]
     ):
 
         nr, mr, cov = (
@@ -245,18 +245,14 @@ def detect_reference_lines(
                 mr
                 / max(
                     1,
-                    g.shape[0],
+                    crop.shape[0],
                 ),
                 0.35,
             )
         )
 
-    # --------------------------------------------------------
-    # Hough
-    # --------------------------------------------------------
-
     edges = cv2.Canny(
-        g,
+        crop,
         40,
         140,
     )
@@ -287,11 +283,10 @@ def detect_reference_lines(
 
     if lines is not None:
 
-        line_records = (
+        records = (
             np.asarray(
                 lines
-            )
-            .reshape(
+            ).reshape(
                 -1,
                 4,
             )
@@ -302,7 +297,7 @@ def detect_reference_lines(
             y_a,
             x_b,
             y_b,
-        ) in line_records:
+        ) in records:
 
             dx = abs(
                 int(x_b)
@@ -331,7 +326,7 @@ def detect_reference_lines(
                 )
             ):
 
-                xm = int(
+                x_mid = int(
                     round(
                         (
                             x_a
@@ -343,15 +338,13 @@ def detect_reference_lines(
 
                 if (
                     0
-                    <= xm
-                    < g.shape[1]
+                    <= x_mid
+                    < crop.shape[1]
                 ):
 
-                    hough[xm] += dy
-
-    # --------------------------------------------------------
-    # Combined score
-    # --------------------------------------------------------
+                    hough_score[
+                        x_mid
+                    ] += dy
 
     score = (
         0.35
@@ -364,7 +357,7 @@ def detect_reference_lines(
         )
         + 0.25
         * _norm(
-            hough
+            hough_score
         )
     )
 
@@ -373,7 +366,10 @@ def detect_reference_lines(
             1,
             -1,
         ),
-        (0, 0),
+        (
+            0,
+            0,
+        ),
         max(
             1,
             0.003 * w,
@@ -398,35 +394,36 @@ def detect_reference_lines(
 
     candidates = []
 
-    min_dist = max(
+    minimum_distance = max(
         8,
         int(
             0.025 * w
         ),
     )
 
-    for qx in order:
+    for candidate in order:
 
-        xx = int(
-            qx
+        x = int(
+            candidate
         )
 
         if score[
-            xx
+            x
         ] <= 0:
 
             break
 
         if all(
             abs(
-                xx - c
+                x
+                - old
             )
-            >= min_dist
-            for c in candidates
+            >= minimum_distance
+            for old in candidates
         ):
 
             candidates.append(
-                xx
+                x
             )
 
         if len(
@@ -435,18 +432,14 @@ def detect_reference_lines(
 
             break
 
-    # --------------------------------------------------------
-    # Best pair
-    # --------------------------------------------------------
-
     best = None
-    best_pair = -1.0
+    best_score = -1.0
 
-    min_sep = max(
+    minimum_separation = max(
         30,
         int(
             0.30
-            * g.shape[1]
+            * crop.shape[1]
         ),
     )
 
@@ -458,49 +451,54 @@ def detect_reference_lines(
             i + 1:
         ]:
 
-            left0, right0 = sorted(
+            left, right = sorted(
                 (
                     a,
                     b,
                 )
             )
 
-            sep = (
-                right0
-                - left0
+            separation = (
+                right
+                - left
             )
 
-            if sep < min_sep:
+            if (
+                separation
+                < minimum_separation
+            ):
 
                 continue
 
-            pair = float(
+            pair_score = float(
                 score[
-                    left0
+                    left
                 ]
                 + score[
-                    right0
+                    right
                 ]
             )
 
             if (
-                left0
+                left
                 < 0.45
-                * g.shape[1]
-                and right0
+                * crop.shape[1]
+                and right
                 > 0.55
-                * g.shape[1]
+                * crop.shape[1]
             ):
 
-                pair += 0.25
+                pair_score += 0.25
 
-            if pair > best_pair:
+            if pair_score > best_score:
 
-                best_pair = pair
+                best_score = (
+                    pair_score
+                )
 
                 best = (
-                    left0,
-                    right0,
+                    left,
+                    right,
                 )
 
     if best is None:
@@ -511,15 +509,7 @@ def detect_reference_lines(
             "right_x": None,
             "roi_width": None,
             "confidence": 0.0,
-            "method": (
-                "no_reliable_pair"
-            ),
-            "candidates": [
-                int(
-                    c + x0
-                )
-                for c in candidates
-            ],
+            "method": "no_reliable_pair",
         }
 
     left, right = best
@@ -529,18 +519,14 @@ def detect_reference_lines(
 
     return {
         "ok": True,
-        "left_x": int(
-            left
-        ),
-        "right_x": int(
-            right
-        ),
+        "left_x": int(left),
+        "right_x": int(right),
         "roi_width": int(
             right - left
         ),
         "confidence": float(
             np.clip(
-                best_pair
+                best_score
                 / 2.0,
                 0,
                 1,
@@ -549,12 +535,575 @@ def detect_reference_lines(
         "method": (
             "dashed-runs+hough"
         ),
-        "candidates": [
+    }
+
+
+# ============================================================
+# HORIZONTAL X-AXIS DETECTION
+# ============================================================
+
+def detect_horizontal_x_axis(
+    rgb: np.ndarray,
+) -> dict:
+    """
+    Detect the actual horizontal X-axis.
+
+    IMPORTANT:
+    This function does NOT detect numerical labels.
+
+    It looks for a long horizontal line in the lower
+    portion of the graph.
+    """
+
+    gray = cv2.cvtColor(
+        rgb,
+        cv2.COLOR_RGB2GRAY,
+    )
+
+    h, w = gray.shape
+
+    # --------------------------------------------------------
+    # Improve visibility
+    # --------------------------------------------------------
+
+    clahe = cv2.createCLAHE(
+        clipLimit=2.0,
+        tileGridSize=(
+            8,
+            8,
+        ),
+    )
+
+    enhanced = clahe.apply(
+        gray
+    )
+
+    # --------------------------------------------------------
+    # Canny
+    # --------------------------------------------------------
+
+    edges = cv2.Canny(
+        enhanced,
+        30,
+        110,
+    )
+
+    # Only search in lower graph area.
+    y_start = int(
+        0.55 * h
+    )
+
+    y_end = int(
+        0.90 * h
+    )
+
+    lower_edges = np.zeros_like(
+        edges
+    )
+
+    lower_edges[
+        y_start:y_end
+    ] = edges[
+        y_start:y_end
+    ]
+
+    # --------------------------------------------------------
+    # Hough candidates
+    # --------------------------------------------------------
+
+    lines = cv2.HoughLinesP(
+        lower_edges,
+        1,
+        np.pi / 180,
+        threshold=max(
+            20,
             int(
-                c + x0
+                0.025 * w
+            ),
+        ),
+        minLineLength=max(
+            40,
+            int(
+                0.25 * w
+            ),
+        ),
+        maxLineGap=max(
+            8,
+            int(
+                0.02 * w
+            ),
+        ),
+    )
+
+    candidates = []
+
+    if lines is not None:
+
+        records = (
+            np.asarray(
+                lines
+            ).reshape(
+                -1,
+                4,
             )
-            for c in candidates
-        ],
+        )
+
+        for (
+            x1,
+            y1,
+            x2,
+            y2,
+        ) in records:
+
+            dx = abs(
+                int(x2)
+                - int(x1)
+            )
+
+            dy = abs(
+                int(y2)
+                - int(y1)
+            )
+
+            if dx <= 0:
+                continue
+
+            angle = abs(
+                np.degrees(
+                    np.arctan2(
+                        dy,
+                        dx,
+                    )
+                )
+            )
+
+            if angle > 2.5:
+                continue
+
+            y_mid = (
+                int(y1)
+                + int(y2)
+            ) // 2
+
+            length = float(
+                np.hypot(
+                    dx,
+                    dy,
+                )
+            )
+
+            x_left = min(
+                int(x1),
+                int(x2),
+            )
+
+            x_right = max(
+                int(x1),
+                int(x2),
+            )
+
+            # Darkness directly around the line.
+            y0 = max(
+                0,
+                y_mid - 2,
+            )
+
+            y1b = min(
+                h,
+                y_mid + 3,
+            )
+
+            band = enhanced[
+                y0:y1b,
+                x_left:x_right + 1,
+            ]
+
+            darkness = (
+                float(
+                    np.mean(
+                        band < 190
+                    )
+                )
+                if band.size
+                else 0.0
+            )
+
+            # Prefer long lines low in the graph.
+            vertical_position = (
+                1.0
+                - abs(
+                    (
+                        y_mid
+                        / max(
+                            1,
+                            h,
+                        )
+                    )
+                    - 0.79
+                )
+                / 0.30
+            )
+
+            vertical_position = float(
+                np.clip(
+                    vertical_position,
+                    0,
+                    1,
+                )
+            )
+
+            score = (
+                length
+                * (
+                    0.65
+                    + 0.25
+                    * darkness
+                    + 0.10
+                    * vertical_position
+                )
+            )
+
+            candidates.append(
+                {
+                    "start_x": x_left,
+                    "end_x": x_right,
+                    "y": y_mid,
+                    "length": length,
+                    "darkness": darkness,
+                    "score": score,
+                }
+            )
+
+    # --------------------------------------------------------
+    # Morphological backup
+    # --------------------------------------------------------
+
+    binary = cv2.adaptiveThreshold(
+        enhanced,
+        255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY_INV,
+        31,
+        9,
+    )
+
+    lower_binary = np.zeros_like(
+        binary
+    )
+
+    lower_binary[
+        y_start:y_end
+    ] = binary[
+        y_start:y_end
+    ]
+
+    kernel_width = max(
+        20,
+        int(
+            0.05 * w
+        ),
+    )
+
+    horizontal_kernel = cv2.getStructuringElement(
+        cv2.MORPH_RECT,
+        (
+            kernel_width,
+            1,
+        ),
+    )
+
+    horizontal = cv2.morphologyEx(
+        lower_binary,
+        cv2.MORPH_OPEN,
+        horizontal_kernel,
+    )
+
+    horizontal = cv2.morphologyEx(
+        horizontal,
+        cv2.MORPH_CLOSE,
+        horizontal_kernel,
+    )
+
+    contours, _ = cv2.findContours(
+        horizontal,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE,
+    )
+
+    for contour in contours:
+
+        x, y, cw, ch = (
+            cv2.boundingRect(
+                contour
+            )
+        )
+
+        if (
+            cw
+            < max(
+                100,
+                int(
+                    0.30 * w
+                ),
+            )
+        ):
+
+            continue
+
+        if ch > 8:
+            continue
+
+        candidates.append(
+            {
+                "start_x": int(
+                    x
+                ),
+                "end_x": int(
+                    x + cw - 1
+                ),
+                "y": int(
+                    y + ch // 2
+                ),
+                "length": float(
+                    cw
+                ),
+                "darkness": 0.50,
+                "score": float(
+                    cw * 0.80
+                ),
+            }
+        )
+
+    # --------------------------------------------------------
+    # No candidate
+    # --------------------------------------------------------
+
+    if not candidates:
+
+        return {
+            "ok": False,
+            "start_x": None,
+            "end_x": None,
+            "y": None,
+            "confidence": 0.0,
+            "method": "not_found",
+        }
+
+    # --------------------------------------------------------
+    # Remove tiny duplicates / pick best
+    # --------------------------------------------------------
+
+    candidates.sort(
+        key=lambda c: c["score"],
+        reverse=True,
+    )
+
+    best = candidates[0]
+
+    # If there are several overlapping pieces at nearly the
+    # same Y, merge them into a longer horizontal axis.
+    same_y = [
+        c
+        for c in candidates
+        if abs(
+            c["y"]
+            - best["y"]
+        )
+        <= 6
+    ]
+
+    if len(
+        same_y
+    ) > 1:
+
+        start = min(
+            c["start_x"]
+            for c in same_y
+        )
+
+        end = max(
+            c["end_x"]
+            for c in same_y
+        )
+
+        merged_length = (
+            end
+            - start
+            + 1
+        )
+
+        # Only accept merging when the resulting line is
+        # reasonably continuous.
+        union_area = np.zeros(
+            (
+                1,
+                w,
+            ),
+            dtype=np.uint8,
+        )
+
+        for c in same_y:
+
+            cv2.line(
+                union_area,
+                (
+                    c[
+                        "start_x"
+                    ],
+                    0,
+                ),
+                (
+                    c[
+                        "end_x"
+                    ],
+                    0,
+                ),
+                255,
+                1,
+            )
+
+        # Longest connected run.
+        positions = np.flatnonzero(
+            union_area[0] > 0
+        )
+
+        if positions.size:
+
+            starts = positions[
+                np.r_[
+                    True,
+                    np.diff(
+                        positions
+                    ) > 1,
+                ]
+            ]
+
+            ends = positions[
+                np.r_[
+                    np.diff(
+                        positions
+                    ) > 1,
+                    True,
+                ]
+            ]
+
+            lengths = (
+                ends
+                - starts
+                + 1
+            )
+
+            largest = int(
+                np.argmax(
+                    lengths
+                )
+            )
+
+            start = int(
+                starts[
+                    largest
+                ]
+            )
+
+            end = int(
+                ends[
+                    largest
+                ]
+            )
+
+        best = dict(
+            best,
+            start_x=start,
+            end_x=end,
+            length=float(
+                end
+                - start
+                + 1
+            ),
+        )
+
+    # --------------------------------------------------------
+    # Validation
+    # --------------------------------------------------------
+
+    axis_length = (
+        best["end_x"]
+        - best["start_x"]
+        + 1
+    )
+
+    minimum_axis_length = max(
+        120,
+        int(
+            0.35 * w
+        ),
+    )
+
+    if (
+        axis_length
+        < minimum_axis_length
+    ):
+
+        return {
+            "ok": False,
+            "start_x": None,
+            "end_x": None,
+            "y": int(
+                best["y"]
+            ),
+            "confidence": float(
+                np.clip(
+                    axis_length
+                    / max(
+                        1,
+                        minimum_axis_length,
+                    ),
+                    0,
+                    1,
+                )
+            ),
+            "method": "axis_too_short",
+        }
+
+    confidence = float(
+        np.clip(
+            0.65
+            * (
+                axis_length
+                / max(
+                    1,
+                    0.85 * w,
+                )
+            )
+            + 0.20
+            * best.get(
+                "darkness",
+                0.5,
+            )
+            + 0.15,
+            0,
+            1,
+        )
+    )
+
+    return {
+        "ok": True,
+        "start_x": int(
+            best["start_x"]
+        ),
+        "end_x": int(
+            best["end_x"]
+        ),
+        "y": int(
+            best["y"]
+        ),
+        "length": int(
+            axis_length
+        ),
+        "confidence": confidence,
+        "method": (
+            "horizontal-axis-line"
+        ),
     }
 
 
@@ -594,7 +1143,7 @@ def predict_curve(
 
 
 # ============================================================
-# FAINT-CURVE VISUAL ENHANCEMENT
+# VISUAL FAINТ-CURVE SCORE
 # ============================================================
 
 def build_visual_curve_score(
@@ -603,20 +1152,11 @@ def build_visual_curve_score(
     right: int,
     baseline: int,
 ) -> np.ndarray:
-    """
-    Generates an additional image-based cue for faint curves.
-
-    U-Net remains the main model signal.
-    """
 
     gray = cv2.cvtColor(
         rgb,
         cv2.COLOR_RGB2GRAY,
     )
-
-    # --------------------------------------------------------
-    # CLAHE
-    # --------------------------------------------------------
 
     clahe = cv2.createCLAHE(
         clipLimit=2.0,
@@ -630,34 +1170,24 @@ def build_visual_curve_score(
         gray
     )
 
-    # --------------------------------------------------------
-    # Dark-line cue
-    # --------------------------------------------------------
-
     dark_score = np.clip(
         (
-            210.0
+            220.0
             - enhanced.astype(
                 np.float32
             )
         )
-        / 160.0,
+        / 170.0,
         0.0,
         1.0,
     )
 
-    # --------------------------------------------------------
-    # Black-hat cue
-    # --------------------------------------------------------
-
-    blackhat_kernel = (
-        cv2.getStructuringElement(
-            cv2.MORPH_ELLIPSE,
-            (
-                13,
-                13,
-            ),
-        )
+    blackhat_kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE,
+        (
+            13,
+            13,
+        ),
     )
 
     blackhat = cv2.morphologyEx(
@@ -672,13 +1202,9 @@ def build_visual_curve_score(
         blackhat
     )
 
-    # --------------------------------------------------------
-    # Edge cue
-    # --------------------------------------------------------
-
     edges = cv2.Canny(
         enhanced,
-        25,
+        20,
         100,
     ).astype(
         np.float32
@@ -688,14 +1214,13 @@ def build_visual_curve_score(
         edges
     )
 
-    # --------------------------------------------------------
-    # Combined
-    # --------------------------------------------------------
-
     visual = (
-        0.45 * dark_score
-        + 0.35 * blackhat
-        + 0.20 * edges
+        0.45
+        * dark_score
+        + 0.35
+        * blackhat
+        + 0.20
+        * edges
     )
 
     visual = cv2.GaussianBlur(
@@ -709,29 +1234,23 @@ def build_visual_curve_score(
         1.0,
     )
 
-    # Restrict to ROI and above baseline.
-    output = np.zeros_like(
+    result = np.zeros_like(
         visual,
         dtype=np.float32,
     )
 
-    top = max(
-        0,
-        int(
-            0.02
-            * rgb.shape[0]
-        ),
+    top = int(
+        0.02 * rgb.shape[0]
     )
 
     bottom = max(
         top + 1,
         int(
             baseline
-        )
-        - 2,
+        ) - 2,
     )
 
-    output[
+    result[
         top:bottom,
         left:right + 1,
     ] = visual[
@@ -740,25 +1259,25 @@ def build_visual_curve_score(
     ]
 
     return np.clip(
-        output,
-        0.0,
-        1.0,
+        result,
+        0,
+        1,
     )
 
 
 # ============================================================
-# CURVE MASK
+# MASK
 # ============================================================
 
 def clean_curve_probability(
-    prob: np.ndarray,
+    probability: np.ndarray,
     left: int,
     right: int,
     threshold: float,
 ) -> np.ndarray:
 
     mask = (
-        prob
+        probability
         >= float(
             threshold
         )
@@ -766,11 +1285,11 @@ def clean_curve_probability(
         np.uint8
     )
 
-    clean = np.zeros_like(
+    result = np.zeros_like(
         mask
     )
 
-    clean[
+    result[
         :,
         left:right + 1,
     ] = mask[
@@ -778,8 +1297,8 @@ def clean_curve_probability(
         left:right + 1,
     ]
 
-    clean = cv2.morphologyEx(
-        clean,
+    result = cv2.morphologyEx(
+        result,
         cv2.MORPH_CLOSE,
         np.ones(
             (
@@ -790,7 +1309,7 @@ def clean_curve_probability(
         ),
     )
 
-    return clean
+    return result
 
 
 # ============================================================
@@ -835,7 +1354,7 @@ def estimate_baseline(
         140,
     )
 
-    row_edge = (
+    row_edges = (
         edges[
             ylo:yhi,
             l:r + 1,
@@ -867,7 +1386,7 @@ def estimate_baseline(
     score = (
         0.70
         * _norm(
-            row_edge
+            row_edges
         )
         + 0.30
         * _norm(
@@ -893,7 +1412,11 @@ def estimate_baseline(
     step = max(
         1,
         int(
-            (r - l + 1)
+            (
+                r
+                - l
+                + 1
+            )
             / 300
         ),
     )
@@ -904,7 +1427,7 @@ def estimate_baseline(
         step,
     ):
 
-        yy = np.where(
+        ys = np.where(
             mask[
                 :,
                 x
@@ -912,16 +1435,16 @@ def estimate_baseline(
             > 0
         )[0]
 
-        yy = yy[
-            yy
+        ys = ys[
+            ys
             < 0.97 * h
         ]
 
-        if yy.size:
+        if ys.size:
 
             bottoms.append(
                 int(
-                    yy.max()
+                    ys.max()
                 )
             )
 
@@ -938,7 +1461,7 @@ def estimate_baseline(
         else None
     )
 
-    base = (
+    baseline = (
         axis_y
         if (
             curve_y is None
@@ -957,7 +1480,7 @@ def estimate_baseline(
     return int(
         np.clip(
             round(
-                base
+                baseline
             ),
             int(
                 0.55 * h
@@ -977,7 +1500,7 @@ def estimate_plot_top(
     rgb: np.ndarray,
     left: int,
     right: int,
-    baseline_y: int,
+    baseline: int,
 ) -> int:
 
     h, w = rgb.shape[:2]
@@ -994,7 +1517,7 @@ def estimate_plot_top(
         ),
     )
 
-    candidates = []
+    values = []
 
     for x in (
         int(left),
@@ -1012,15 +1535,14 @@ def estimate_plot_top(
         )
 
         strip = gray[
-            :baseline_y + 1,
+            :baseline + 1,
             a:b,
         ]
 
         if strip.size == 0:
-
             continue
 
-        dark = (
+        count = (
             strip
             < 210
         ).sum(
@@ -1028,21 +1550,21 @@ def estimate_plot_top(
         )
 
         ys = np.where(
-            dark > 0
+            count > 0
         )[0]
 
         if ys.size:
 
-            candidates.append(
+            values.append(
                 int(
                     ys[0]
                 )
             )
 
-    if candidates:
+    if values:
 
         top = min(
-            candidates
+            values
         )
 
     else:
@@ -1051,124 +1573,110 @@ def estimate_plot_top(
             0.08 * h
         )
 
-    top = min(
-        top,
-        baseline_y - 10,
-    )
-
     return int(
-        max(
-            0,
+        np.clip(
             top,
+            0,
+            max(
+                0,
+                baseline - 10,
+            ),
         )
     )
 
 
 # ============================================================
-# CURVE TRACKING
+# CURVE TRACKER
 # ============================================================
 
 def _walk_track(
-    probability: np.ndarray,
-    visual: np.ndarray,
-    xs: np.ndarray,
-    ys: np.ndarray,
-    confidence: np.ndarray,
-    seed_index: int,
-    seed_y: float,
-    lower: int,
-    direction: int,
-    threshold: float,
+    probability,
+    visual,
+    xs,
+    ys,
+    confidence,
+    seed_index,
+    seed_y,
+    lower,
+    direction,
+    threshold,
 ):
 
-    image_height = (
-        probability.shape[0]
-    )
+    h = probability.shape[0]
 
-    # --------------------------------------------------------
-    # Lower threshold => more movement tolerance.
-    # --------------------------------------------------------
-
-    sensitivity_factor = float(
+    sensitivity = float(
         np.clip(
             (
                 0.32
                 - threshold
             )
             / 0.27,
-            0.0,
-            1.0,
+            0,
+            1,
         )
     )
 
     max_step = int(
-        image_height
+        h
         * (
             0.030
-            + 0.030
-            * sensitivity_factor
+            + 0.032
+            * sensitivity
         )
     )
 
     max_step = max(
         5,
         min(
-            36,
+            40,
             max_step,
         ),
     )
 
     max_gap = int(
         8
-        + 14
-        * sensitivity_factor
+        + 16
+        * sensitivity
     )
 
-    # Combined signal weight.
     visual_weight = (
         0.10
-        + 0.20
-        * sensitivity_factor
+        + 0.22
+        * sensitivity
     )
 
-    # Probability acceptance.
     track_threshold = max(
-        0.035,
-        min(
-            0.35,
-            threshold
-            * (
-                0.65
-                - 0.20
-                * sensitivity_factor
-            ),
+        0.025,
+        threshold
+        * (
+            0.70
+            - 0.25
+            * sensitivity
         ),
     )
 
-    prev = float(
+    previous_y = float(
         seed_y
     )
 
-    gaps = 0
+    gap_count = 0
 
-    if direction > 0:
-
-        iterator = range(
+    iterator = (
+        range(
             seed_index + 1,
             len(xs),
         )
-
-    else:
-
-        iterator = range(
+        if direction > 0
+        else range(
             seed_index - 1,
             -1,
             -1,
         )
+    )
 
     for j in iterator:
 
-        if gaps > max_gap:
+        if gap_count > max_gap:
 
             break
 
@@ -1180,7 +1688,7 @@ def _walk_track(
             0,
             int(
                 round(
-                    prev
+                    previous_y
                 )
             )
             - max_step,
@@ -1190,7 +1698,7 @@ def _walk_track(
             lower,
             int(
                 round(
-                    prev
+                    previous_y
                 )
             )
             + max_step,
@@ -1198,20 +1706,21 @@ def _walk_track(
 
         if y1 < y0:
 
-            gaps += 1
+            gap_count += 1
+
             continue
 
-        pvals = probability[
+        probabilities = probability[
             y0:y1 + 1,
             x,
         ]
 
-        vvals = visual[
+        visual_values = visual[
             y0:y1 + 1,
             x,
         ]
 
-        yy = np.arange(
+        candidate_y = np.arange(
             y0,
             y1 + 1,
             dtype=np.float32,
@@ -1222,71 +1731,73 @@ def _walk_track(
                 1.0
                 - visual_weight
             )
-            * pvals
+            * probabilities
             + visual_weight
-            * vvals
+            * visual_values
         )
 
-        # Continuity penalty.
-        continuity_penalty = (
+        continuity = (
             0.014
-            + 0.010
-            * sensitivity_factor
+            + 0.012
+            * sensitivity
         )
 
         score = (
             hybrid
-            - continuity_penalty
+            - continuity
             * np.abs(
-                yy
-                - prev
+                candidate_y
+                - previous_y
             )
         )
 
-        k = int(
+        index = int(
             np.argmax(
                 score
             )
         )
 
-        selected_probability = float(
-            pvals[k]
+        chosen_probability = float(
+            probabilities[
+                index
+            ]
         )
 
-        selected_score = float(
-            score[k]
+        chosen_score = float(
+            score[
+                index
+            ]
         )
 
-        # ----------------------------------------------------
-        # Accept weak pixels when visual cue is strong.
-        # ----------------------------------------------------
+        chosen_visual = float(
+            visual_values[
+                index
+            ]
+        )
 
-        acceptance = (
-            selected_probability
+        accept = (
+            chosen_probability
             >= track_threshold
             or (
-                selected_score
+                chosen_score
                 >= track_threshold
-                * 0.75
-                and float(
-                    vvals[k]
-                )
-                >= 0.28
+                * 0.65
+                and chosen_visual
+                >= 0.25
             )
         )
 
-        if not acceptance:
+        if not accept:
 
-            gaps += 1
+            gap_count += 1
+
             continue
 
         chosen_y = int(
-            yy[k]
+            candidate_y[
+                index
+            ]
         )
-
-        # ----------------------------------------------------
-        # Local weighted centre
-        # ----------------------------------------------------
 
         a = max(
             y0,
@@ -1298,44 +1809,44 @@ def _walk_track(
             chosen_y + 2,
         )
 
-        local_probability = probability[
+        p_local = probability[
             a:b + 1,
             x,
         ]
 
-        local_visual = visual[
+        v_local = visual[
             a:b + 1,
             x,
         ]
 
-        local_signal = (
+        local = (
             (
                 1.0
                 - visual_weight
             )
-            * local_probability
+            * p_local
             + visual_weight
-            * local_visual
+            * v_local
         )
 
         weights = np.maximum(
-            local_signal,
-            0.0,
+            local,
+            0,
         )
 
-        denominator = float(
+        total = float(
             weights.sum()
         )
 
-        if denominator <= 1e-8:
+        if total <= 1e-8:
 
-            chosen_center = float(
+            center = float(
                 chosen_y
             )
 
         else:
 
-            chosen_center = float(
+            center = float(
                 (
                     np.arange(
                         a,
@@ -1343,43 +1854,35 @@ def _walk_track(
                     )
                     * weights
                 ).sum()
-                / denominator
+                / total
             )
 
-        ys[j] = chosen_center
+        ys[j] = center
 
         confidence[j] = max(
-            selected_probability,
-            selected_score,
+            chosen_probability,
+            chosen_score,
         )
 
-        prev = chosen_center
+        previous_y = center
 
-        gaps = 0
+        gap_count = 0
 
 
 def build_curve_track(
-    probability: np.ndarray,
-    visual: np.ndarray,
-    left: int,
-    right: int,
-    baseline: int,
-    threshold: float,
+    probability,
+    visual,
+    left,
+    right,
+    baseline,
+    threshold,
 ):
 
     h, _ = probability.shape
 
-    left = int(
-        left
-    )
-
-    right = int(
-        right
-    )
-
     xs = np.arange(
-        left,
-        right + 1,
+        int(left),
+        int(right) + 1,
         dtype=np.int32,
     )
 
@@ -1409,31 +1912,27 @@ def build_curve_track(
             confidence,
         )
 
-    # --------------------------------------------------------
-    # Sensitivity-dependent hybrid weight.
-    # --------------------------------------------------------
-
-    sensitivity_factor = float(
+    sensitivity = float(
         np.clip(
             (
                 0.32
                 - threshold
             )
             / 0.27,
-            0.0,
-            1.0,
+            0,
+            1,
         )
     )
 
     visual_weight = (
         0.10
-        + 0.20
-        * sensitivity_factor
+        + 0.22
+        * sensitivity
     )
 
     hybrid = (
         (
-            1.0
+            1
             - visual_weight
         )
         * probability
@@ -1443,7 +1942,7 @@ def build_curve_track(
 
     crop = hybrid[
         :lower + 1,
-        left:right + 1,
+        int(left):int(right) + 1,
     ]
 
     if crop.size == 0:
@@ -1453,10 +1952,6 @@ def build_curve_track(
             ys,
             confidence,
         )
-
-    # --------------------------------------------------------
-    # Find seed peak.
-    # --------------------------------------------------------
 
     py, px = np.unravel_index(
         int(
@@ -1474,11 +1969,14 @@ def build_curve_track(
         ]
     )
 
-    # Lower sensitivity threshold permits lower seed.
     seed_threshold = max(
-        0.08,
+        0.07,
         threshold
-        * 1.10,
+        * (
+            1.10
+            - 0.35
+            * sensitivity
+        ),
     )
 
     if (
@@ -1502,10 +2000,6 @@ def build_curve_track(
         px
     ] = seed_score
 
-    # --------------------------------------------------------
-    # Track right
-    # --------------------------------------------------------
-
     _walk_track(
         probability,
         visual,
@@ -1522,10 +2016,6 @@ def build_curve_track(
         +1,
         threshold,
     )
-
-    # --------------------------------------------------------
-    # Track left
-    # --------------------------------------------------------
 
     _walk_track(
         probability,
@@ -1552,93 +2042,37 @@ def build_curve_track(
 
 
 # ============================================================
-# SAFE 1D MEDIAN
-# ============================================================
-
-def _median_1d(
-    values: np.ndarray,
-    kernel_size: int,
-) -> np.ndarray:
-
-    if len(
-        values
-    ) < 3:
-
-        return values.copy()
-
-    k = int(
-        kernel_size
-    )
-
-    if k < 3:
-
-        return values.copy()
-
-    if k % 2 == 0:
-
-        k += 1
-
-    radius = k // 2
-
-    padded = np.pad(
-        values,
-        (
-            radius,
-            radius,
-        ),
-        mode="edge",
-    )
-
-    windows = (
-        np.lib.stride_tricks
-        .sliding_window_view(
-            padded,
-            k,
-        )
-    )
-
-    return np.median(
-        windows,
-        axis=-1,
-    ).astype(
-        np.float32
-    )
-
-
-# ============================================================
-# SAFE CURVE SMOOTHING
+# SAFE SMOOTHING
 # ============================================================
 
 def smooth_array(
-    v: np.ndarray,
+    values: np.ndarray,
 ) -> np.ndarray:
     """
     Safe float32 smoothing.
 
-    IMPORTANT:
-    This intentionally does NOT use cv2.medianBlur().
-    OpenCV 4.14 rejects the float32 array used by this pipeline.
+    Does not call cv2.medianBlur on float32 data.
     """
 
-    output = np.full_like(
-        v,
+    result = np.full_like(
+        values,
         np.nan,
         dtype=np.float32,
     )
 
     finite = np.isfinite(
-        v
+        values
     )
 
     if finite.sum() < 5:
 
-        output[
+        result[
             finite
-        ] = v[
+        ] = values[
             finite
         ]
 
-        return output
+        return result
 
     indices = np.flatnonzero(
         finite
@@ -1665,19 +2099,18 @@ def smooth_array(
             segment
         ) < 3:
 
-            output[
+            result[
                 segment
-            ] = v[
+            ] = values[
                 segment
             ]
 
             continue
 
-        values = (
-            v[
+        segment_values = (
+            values[
                 segment
-            ]
-            .astype(
+            ].astype(
                 np.float32
             )
         )
@@ -1697,14 +2130,35 @@ def smooth_array(
             ),
         )
 
-        output[
-            segment
-        ] = _median_1d(
-            values,
-            kernel,
+        radius = kernel // 2
+
+        padded = np.pad(
+            segment_values,
+            (
+                radius,
+                radius,
+            ),
+            mode="edge",
         )
 
-    return output
+        windows = (
+            np.lib.stride_tricks
+            .sliding_window_view(
+                padded,
+                kernel,
+            )
+        )
+
+        result[
+            segment
+        ] = np.median(
+            windows,
+            axis=-1,
+        ).astype(
+            np.float32
+        )
+
+    return result
 
 
 # ============================================================
@@ -1712,19 +2166,19 @@ def smooth_array(
 # ============================================================
 
 def genuine_intersections(
-    xs: np.ndarray,
-    ys: np.ndarray,
-    y50: float,
-    left: int,
-    right: int,
-) -> list[float]:
+    xs,
+    ys,
+    y50,
+    left,
+    right,
+):
 
     valid = (
         np.isfinite(
-            ys
+            xs
         )
         & np.isfinite(
-            xs
+            ys
         )
         & (
             xs >= left
@@ -1750,7 +2204,7 @@ def genuine_intersections(
 
         return []
 
-    d = (
+    difference = (
         y
         - float(
             y50
@@ -1763,7 +2217,7 @@ def genuine_intersections(
         len(x) - 1
     ):
 
-        # Do not bridge large missing curve gaps.
+        # Never bridge a large missing segment.
         if (
             x[i + 1]
             - x[i]
@@ -1772,10 +2226,9 @@ def genuine_intersections(
 
             continue
 
-        # Direct close intersection.
         if (
             abs(
-                d[i]
+                difference[i]
             )
             <= 0.45
         ):
@@ -1786,49 +2239,44 @@ def genuine_intersections(
                 )
             )
 
-        # True sign crossing.
         if (
-            d[i]
-            * d[i + 1]
+            difference[i]
+            * difference[i + 1]
             < 0
         ):
 
             denominator = (
                 abs(
-                    d[i]
+                    difference[i]
                 )
                 + abs(
-                    d[i + 1]
+                    difference[i + 1]
                 )
                 + 1e-12
             )
 
             t = (
                 abs(
-                    d[i]
+                    difference[i]
                 )
                 / denominator
             )
 
-            x_cross = (
-                x[i]
-                + t
-                * (
-                    x[i + 1]
-                    - x[i]
-                )
-            )
-
             intersections.append(
                 float(
-                    x_cross
+                    x[i]
+                    + t
+                    * (
+                        x[i + 1]
+                        - x[i]
+                    )
                 )
             )
 
     if (
-        len(d)
+        len(difference)
         and abs(
-            d[-1]
+            difference[-1]
         )
         <= 0.45
     ):
@@ -1841,10 +2289,9 @@ def genuine_intersections(
 
     intersections.sort()
 
-    # Merge duplicates.
     output = []
 
-    minimum_distance = max(
+    merge_distance = max(
         2.0,
         0.004
         * max(
@@ -1857,11 +2304,9 @@ def genuine_intersections(
 
         if (
             not output
-            or (
-                value
-                - output[-1]
-                > minimum_distance
-            )
+            or value
+            - output[-1]
+            > merge_distance
         ):
 
             output.append(
@@ -1872,16 +2317,16 @@ def genuine_intersections(
 
 
 # ============================================================
-# PIXEL -> X VALUE
+# PIXEL TO F-L
 # ============================================================
 
 def px_to_fl(
-    x: float,
-    axis_start_px: int,
-    axis_end_px: int,
-    xmin: float,
-    xmax: float,
-) -> float:
+    x,
+    axis_start_px,
+    axis_end_px,
+    xmin,
+    xmax,
+):
 
     denominator = float(
         axis_end_px
@@ -1902,13 +2347,11 @@ def px_to_fl(
     ) / denominator
 
     value = (
-        float(
-            xmin
-        )
+        xmin
         + normalized
         * (
-            float(xmax)
-            - float(xmin)
+            xmax
+            - xmin
         )
     )
 
@@ -1922,15 +2365,15 @@ def px_to_fl(
 
 
 # ============================================================
-# PIXEL -> Y VALUE
+# PIXEL TO Y
 # ============================================================
 
 def py_to_y_fl(
-    y: float,
-    top: int,
-    baseline: int,
-    y_max: float,
-) -> float:
+    y,
+    top,
+    baseline,
+    y_max,
+):
 
     denominator = float(
         baseline
@@ -1945,12 +2388,8 @@ def py_to_y_fl(
 
     value = (
         (
-            float(
-                baseline
-            )
-            - float(
-                y
-            )
+            baseline
+            - float(y)
         )
         / denominator
         * float(
@@ -1961,35 +2400,33 @@ def py_to_y_fl(
     return float(
         np.clip(
             value,
-            0.0,
-            float(
-                y_max
-            ),
+            0,
+            y_max,
         )
     )
 
 
 # ============================================================
-# EXPECTED RECONSTRUCTED TICKS
+# RECONSTRUCTED X TICKS
 # ============================================================
 
 def build_reconstructed_ticks(
-    xmin: float,
-    xmax: float,
-) -> list[float]:
+    xmin,
+    xmax,
+):
 
     start = int(
         np.ceil(
-            xmin / 10.0
-            - 1e-9
+            xmin
+            / 10.0
         )
         * 10
     )
 
     end = int(
         np.floor(
-            xmax / 10.0
-            + 1e-9
+            xmax
+            / 10.0
         )
         * 10
     )
@@ -2046,18 +2483,8 @@ def analyze_plt_image(
         threshold
     )
 
-    # --------------------------------------------------------
-    # Validate numerical ranges.
-    # --------------------------------------------------------
-
     if (
-        not np.isfinite(
-            xmin
-        )
-        or not np.isfinite(
-            xmax
-        )
-        or xmax <= xmin
+        xmax <= xmin
     ):
 
         raise ValueError(
@@ -2066,23 +2493,14 @@ def analyze_plt_image(
         )
 
     if (
-        not np.isfinite(
-            ymax
-        )
-        or ymax <= 0
+        ymax <= 0
     ):
 
         raise ValueError(
             "Y-axis maximum must be greater than 0."
         )
 
-    image_height, image_width = (
-        rgb.shape[:2]
-    )
-
-    # --------------------------------------------------------
-    # Manual axis validation.
-    # --------------------------------------------------------
+    h, w = rgb.shape[:2]
 
     if (
         manual_axis_start_px is None
@@ -2090,46 +2508,34 @@ def analyze_plt_image(
     ):
 
         raise ValueError(
-            "Manual X-axis start and end positions "
-            "are required."
+            "Manual/automatic X-axis calibration "
+            "positions are required."
         )
 
-    axis_start_px = int(
+    axis_start = int(
         manual_axis_start_px
     )
 
-    axis_end_px = int(
+    axis_end = int(
         manual_axis_end_px
     )
 
     if (
-        axis_start_px < 0
-        or axis_start_px
-        >= image_width
-        or axis_end_px < 0
-        or axis_end_px
-        >= image_width
+        axis_start < 0
+        or axis_start >= w
+        or axis_end < 0
+        or axis_end >= w
+        or axis_end <= axis_start
     ):
 
         raise ValueError(
-            "Manual X-axis pixel positions must "
-            "be inside the uploaded image."
+            "Invalid X-axis pixel calibration."
         )
 
-    if (
-        axis_end_px
-        <= axis_start_px
-    ):
-
-        raise ValueError(
-            "Manual X-axis maximum position must "
-            "be greater than the minimum position."
-        )
-
-    pixels_per_fl = float(
+    pixels_per_fl = (
         (
-            axis_end_px
-            - axis_start_px
+            axis_end
+            - axis_start
         )
         / (
             xmax
@@ -2138,7 +2544,7 @@ def analyze_plt_image(
     )
 
     # ========================================================
-    # RESULT INITIALIZATION
+    # RESULT
     # ========================================================
 
     result = {
@@ -2151,7 +2557,8 @@ def analyze_plt_image(
         ),
 
         "axis_detection": (
-            "ROI automatic; X-axis calibration manual"
+            "ROI automatic; X-axis automatic "
+            "with manual pixel correction"
         ),
 
         "x_min_fl": xmin,
@@ -2160,7 +2567,9 @@ def analyze_plt_image(
         "y_min_fl": 0.0,
         "y_max_fl": ymax,
 
-        "segmentation_threshold": threshold,
+        "segmentation_threshold": (
+            threshold
+        ),
 
         "sensitivity": (
             get_sensitivity_description(
@@ -2168,28 +2577,20 @@ def analyze_plt_image(
             )
         ),
 
-        # ----------------------------------------------------
-        # ROI
-        # ----------------------------------------------------
-
         "reference_left_px": None,
         "reference_right_px": None,
         "reference_confidence": 0.0,
         "reference_method": None,
 
-        # ----------------------------------------------------
-        # Manual X axis
-        # ----------------------------------------------------
-
-        "x_axis_start_px": axis_start_px,
-        "x_axis_end_px": axis_end_px,
-
+        "x_axis_start_px": axis_start,
+        "x_axis_end_px": axis_end,
         "x_axis_y_px": None,
 
         "pixels_per_fl": pixels_per_fl,
 
         "x_axis_method": (
-            "Manual calibration"
+            "Automatic horizontal axis "
+            "+ manual correction"
         ),
 
         "x_axis_reconstructed_ticks": (
@@ -2199,16 +2600,8 @@ def analyze_plt_image(
             )
         ),
 
-        # ----------------------------------------------------
-        # Y geometry
-        # ----------------------------------------------------
-
         "baseline_y_px": None,
         "plot_top_y_px": None,
-
-        # ----------------------------------------------------
-        # Peak
-        # ----------------------------------------------------
 
         "peak_x_px": None,
         "peak_y_px": None,
@@ -2218,16 +2611,8 @@ def analyze_plt_image(
 
         "peak_height_px": None,
 
-        # ----------------------------------------------------
-        # 50%
-        # ----------------------------------------------------
-
         "y50_px": None,
         "y50_fl": None,
-
-        # ----------------------------------------------------
-        # Intersections
-        # ----------------------------------------------------
 
         "intersections_px": [],
         "intersections_fl": [],
@@ -2236,21 +2621,9 @@ def analyze_plt_image(
 
         "width_50_fl": None,
 
-        # ----------------------------------------------------
-        # Confidence
-        # ----------------------------------------------------
-
         "confidence": 0.0,
 
-        # ----------------------------------------------------
-        # Warning
-        # ----------------------------------------------------
-
         "warning": None,
-
-        # ----------------------------------------------------
-        # Internal data
-        # ----------------------------------------------------
 
         "image_rgb": rgb,
 
@@ -2264,40 +2637,11 @@ def analyze_plt_image(
     }
 
     # ========================================================
-    # DETECT ROI
+    # ROI
     # ========================================================
 
-    reference = (
-        detect_reference_lines(
-            rgb
-        )
-    )
-
-    result[
-        "reference_left_px"
-    ] = reference.get(
-        "left_x"
-    )
-
-    result[
-        "reference_right_px"
-    ] = reference.get(
-        "right_x"
-    )
-
-    result[
-        "reference_confidence"
-    ] = float(
-        reference.get(
-            "confidence",
-            0.0,
-        )
-    )
-
-    result[
-        "reference_method"
-    ] = reference.get(
-        "method"
+    reference = detect_reference_lines(
+        rgb
     )
 
     if not reference.get(
@@ -2310,34 +2654,49 @@ def analyze_plt_image(
                     "roi_not_found"
                 ),
                 "warning": (
-                    "The two vertical dashed ROI "
-                    "boundaries could not be detected."
+                    "Two reliable vertical dashed "
+                    "ROI boundaries were not detected."
                 ),
             }
         )
 
         return result
 
-    left = int(
+    roi_left = int(
         reference[
             "left_x"
         ]
     )
 
-    right = int(
+    roi_right = int(
         reference[
             "right_x"
         ]
     )
 
+    result.update(
+        {
+            "reference_left_px": roi_left,
+            "reference_right_px": roi_right,
+            "reference_confidence": float(
+                reference.get(
+                    "confidence",
+                    0.0,
+                )
+            ),
+            "reference_method": reference.get(
+                "method"
+            ),
+        }
+    )
+
     if (
-        right
-        - left
+        roi_right
+        - roi_left
         < max(
             40,
             int(
-                0.15
-                * image_width
+                0.15 * w
             ),
         )
     ):
@@ -2356,7 +2715,7 @@ def analyze_plt_image(
         return result
 
     # ========================================================
-    # MODEL CURVE PROBABILITY
+    # MODEL
     # ========================================================
 
     probability = predict_curve(
@@ -2366,27 +2725,21 @@ def analyze_plt_image(
     )
 
     # ========================================================
-    # CLEAN MASK
+    # MASK + BASELINE
     # ========================================================
 
-    curve_mask = (
-        clean_curve_probability(
-            probability,
-            left,
-            right,
-            threshold,
-        )
+    mask = clean_curve_probability(
+        probability,
+        roi_left,
+        roi_right,
+        threshold,
     )
-
-    # ========================================================
-    # BASELINE
-    # ========================================================
 
     baseline = estimate_baseline(
         rgb,
-        curve_mask,
-        left,
-        right,
+        mask,
+        roi_left,
+        roi_right,
     )
 
     result[
@@ -2394,13 +2747,37 @@ def analyze_plt_image(
     ] = baseline
 
     # ========================================================
+    # X-AXIS Y POSITION
+    # ========================================================
+
+    axis_detected = detect_horizontal_x_axis(
+        rgb
+    )
+
+    if axis_detected.get(
+        "ok"
+    ):
+
+        result[
+            "x_axis_y_px"
+        ] = axis_detected.get(
+            "y"
+        )
+
+    else:
+
+        result[
+            "x_axis_y_px"
+        ] = baseline
+
+    # ========================================================
     # PLOT TOP
     # ========================================================
 
     plot_top = estimate_plot_top(
         rgb,
-        left,
-        right,
+        roi_left,
+        roi_right,
         baseline,
     )
 
@@ -2409,29 +2786,29 @@ def analyze_plt_image(
     ] = plot_top
 
     # ========================================================
-    # FAINT-CURVE VISUAL ENHANCEMENT
+    # VISUAL FAINТ CURVE
     # ========================================================
 
     visual = build_visual_curve_score(
         rgb,
-        left,
-        right,
+        roi_left,
+        roi_right,
         baseline,
     )
 
     # ========================================================
-    # TRACK CURVE
+    # TRACK
     # ========================================================
 
     (
         xs,
         ys,
-        curve_confidence,
+        confidence,
     ) = build_curve_track(
         probability,
         visual,
-        left,
-        right,
+        roi_left,
+        roi_right,
         baseline,
         threshold,
     )
@@ -2440,23 +2817,22 @@ def analyze_plt_image(
         {
             "curve_probability": probability,
             "visual_curve_score": visual,
-            "curve_mask": curve_mask,
-
+            "curve_mask": mask,
             "centerline_x": xs,
             "centerline_y": ys,
-
-            "centerline_confidence": (
-                curve_confidence
-            ),
+            "centerline_confidence": confidence,
         }
     )
 
     # ========================================================
-    # VALID CURVE POINTS
+    # VALID TRACE
     # ========================================================
 
     valid = (
         np.isfinite(
+            xs
+        )
+        & np.isfinite(
             ys
         )
         & (
@@ -2464,17 +2840,14 @@ def analyze_plt_image(
             < baseline - 1
         )
         & (
-            xs >= left
+            xs >= roi_left
         )
         & (
-            xs <= right
+            xs <= roi_right
         )
     )
 
-    if (
-        valid.sum()
-        < 10
-    ):
+    if valid.sum() < 10:
 
         result.update(
             {
@@ -2482,51 +2855,49 @@ def analyze_plt_image(
                     "curve_not_found"
                 ),
                 "warning": (
-                    "A reliable curve trace could not "
-                    "be established. Try lowering the "
-                    "sensitivity threshold."
+                    "The curve could not be reliably "
+                    "traced. Lower the sensitivity "
+                    "threshold for faint graphs."
                 ),
             }
         )
 
         return result
 
-    x = xs[
-        valid
-    ].astype(
-        float
-    )
-
-    y = ys[
-        valid
-    ].astype(
-        float
-    )
-
-    conf = curve_confidence[
-        valid
-    ].astype(
-        float
-    )
-
     # ========================================================
     # PEAK
     # ========================================================
 
+    x_valid = xs[
+        valid
+    ].astype(
+        float
+    )
+
+    y_valid = ys[
+        valid
+    ].astype(
+        float
+    )
+
+    confidence_valid = confidence[
+        valid
+    ].astype(
+        float
+    )
+
     heights = (
         baseline
-        - y
+        - y_valid
     )
 
     smoothed = smooth_array(
         heights
     )
 
-    finite_smoothed = np.isfinite(
+    if not np.isfinite(
         smoothed
-    )
-
-    if not finite_smoothed.any():
+    ).any():
 
         result.update(
             {
@@ -2534,8 +2905,7 @@ def analyze_plt_image(
                     "peak_not_found"
                 ),
                 "warning": (
-                    "The curve peak could not "
-                    "be calculated."
+                    "The peak could not be calculated."
                 ),
             }
         )
@@ -2549,37 +2919,29 @@ def analyze_plt_image(
     )
 
     peak_x_px = float(
-        x[
+        x_valid[
             peak_index
         ]
     )
 
     peak_y_px = float(
-        y[
+        y_valid[
             peak_index
         ]
     )
 
-    peak_height_px = float(
+    peak_height = float(
         baseline
         - peak_y_px
     )
 
-    # --------------------------------------------------------
-    # Peak X uses MANUAL axis calibration.
-    # --------------------------------------------------------
-
     peak_x_fl = px_to_fl(
         peak_x_px,
-        axis_start_px,
-        axis_end_px,
+        axis_start,
+        axis_end,
         xmin,
         xmax,
     )
-
-    # --------------------------------------------------------
-    # Peak Y.
-    # --------------------------------------------------------
 
     peak_y_fl = py_to_y_fl(
         peak_y_px,
@@ -2596,14 +2958,11 @@ def analyze_plt_image(
             "peak_x_fl": peak_x_fl,
             "peak_y_fl": peak_y_fl,
 
-            "peak_height_px": peak_height_px,
+            "peak_height_px": peak_height,
         }
     )
 
-    if (
-        peak_height_px
-        < 3
-    ):
+    if peak_height < 3:
 
         result.update(
             {
@@ -2620,13 +2979,13 @@ def analyze_plt_image(
         return result
 
     # ========================================================
-    # 50% OF DETECTED PEAK
+    # 50%
     # ========================================================
 
-    y50_px = float(
+    y50_px = (
         baseline
         - 0.5
-        * peak_height_px
+        * peak_height
     )
 
     y50_fl = py_to_y_fl(
@@ -2653,49 +3012,36 @@ def analyze_plt_image(
             xs,
             ys,
             y50_px,
-            left,
-            right,
+            roi_left,
+            roi_right,
         )
     )
 
-    # ========================================================
-    # CONVERT X VALUES USING MANUAL AXIS
-    # ========================================================
+    intersections_fl = [
 
-    intersections_fl = []
-
-    for px in intersections_px:
-
-        value = px_to_fl(
+        px_to_fl(
             px,
-            axis_start_px,
-            axis_end_px,
+            axis_start,
+            axis_end,
             xmin,
             xmax,
         )
 
-        if np.isfinite(
-            value
-        ):
-
-            intersections_fl.append(
-                float(
-                    value
-                )
-            )
+        for px in intersections_px
+    ]
 
     # --------------------------------------------------------
-    # Final physical/curve consistency validation.
+    # Validate every intersection against the trace.
     # --------------------------------------------------------
 
-    checked_pairs = []
+    verified = []
 
     for px, value in zip(
         intersections_px,
         intersections_fl,
     ):
 
-        nearest = int(
+        index = int(
             np.argmin(
                 np.abs(
                     xs
@@ -2706,51 +3052,47 @@ def analyze_plt_image(
 
         if (
             np.isfinite(
-                ys[
-                    nearest
-                ]
+                ys[index]
             )
             and abs(
                 float(
-                    ys[
-                        nearest
-                    ]
+                    ys[index]
                 )
                 - y50_px
             )
             <= 3
         ):
 
-            checked_pairs.append(
+            verified.append(
                 (
                     float(
-                        value
+                        px
                     ),
                     float(
-                        px
+                        value
                     ),
                 )
             )
 
-    checked_pairs.sort(
-        key=lambda item: item[0]
+    verified.sort(
+        key=lambda item: item[1]
     )
+
+    intersections_px = [
+        item[0]
+        for item in verified
+    ]
 
     intersections_fl = [
         round(
-            item[0],
+            item[1],
             6,
         )
-        for item in checked_pairs
-    ]
-
-    intersections_px = [
-        item[1]
-        for item in checked_pairs
+        for item in verified
     ]
 
     # ========================================================
-    # STATUS
+    # STATUS + WIDTH
     # ========================================================
 
     count = len(
@@ -2775,10 +3117,6 @@ def analyze_plt_image(
             "measure_width"
         )
 
-    # ========================================================
-    # WIDTH
-    # ========================================================
-
     width = (
         max(
             intersections_fl
@@ -2794,14 +3132,14 @@ def analyze_plt_image(
     # CONFIDENCE
     # ========================================================
 
-    curve_conf = (
+    trace_conf = (
         float(
             np.nanmedian(
-                conf
+                confidence_valid
             )
         )
         if np.isfinite(
-            conf
+            confidence_valid
         ).any()
         else 0.0
     )
@@ -2813,13 +3151,12 @@ def analyze_plt_image(
         )
     )
 
-    axis_conf = 1.0
-
-    confidence = float(
+    confidence_score = float(
         np.clip(
-            0.25 * roi_conf
-            + 0.55 * curve_conf
-            + 0.20 * axis_conf,
+            0.30
+            * roi_conf
+            + 0.70
+            * trace_conf,
             0,
             1,
         )
@@ -2835,8 +3172,8 @@ def analyze_plt_image(
 
         warnings.append(
             (
-                "High sensitivity selected; inspect the "
-                "curve trace for possible noise."
+                "High sensitivity selected. "
+                "Check the curve guides for noise."
             )
         )
 
@@ -2844,8 +3181,8 @@ def analyze_plt_image(
 
         warnings.append(
             (
-                "The traced curve does not genuinely "
-                "cross the 50% level inside the ROI."
+                "The curve does not genuinely cross "
+                "the 50% level inside the ROI."
             )
         )
 
@@ -2853,13 +3190,13 @@ def analyze_plt_image(
 
         warnings.append(
             (
-                "Only one genuine 50% intersection was "
-                "detected; width is not calculated."
+                "Only one genuine 50% intersection "
+                "was detected; width is not calculated."
             )
         )
 
     # ========================================================
-    # FINAL RESULT
+    # FINAL
     # ========================================================
 
     result.update(
@@ -2878,7 +3215,7 @@ def analyze_plt_image(
 
             "width_50_fl": width,
 
-            "confidence": confidence,
+            "confidence": confidence_score,
 
             "warning": (
                 " ".join(
@@ -2901,6 +3238,7 @@ def analyze_plt_image(
 
 def annotate_result(
     result: dict,
+    show_guides: bool = True,
 ) -> np.ndarray:
 
     image = result[
@@ -2909,10 +3247,6 @@ def annotate_result(
 
     h, w = image.shape[:2]
 
-    # --------------------------------------------------------
-    # ROI
-    # --------------------------------------------------------
-
     roi_left = result.get(
         "reference_left_px"
     )
@@ -2920,6 +3254,34 @@ def annotate_result(
     roi_right = result.get(
         "reference_right_px"
     )
+
+    axis_start = result.get(
+        "x_axis_start_px"
+    )
+
+    axis_end = result.get(
+        "x_axis_end_px"
+    )
+
+    axis_y = result.get(
+        "x_axis_y_px"
+    )
+
+    baseline = result.get(
+        "baseline_y_px"
+    )
+
+    xmin = result.get(
+        "x_min_fl"
+    )
+
+    xmax = result.get(
+        "x_max_fl"
+    )
+
+    # ========================================================
+    # ROI BOUNDARIES
+    # ========================================================
 
     if roi_left is not None:
 
@@ -2943,6 +3305,7 @@ def annotate_result(
                 0,
             ),
             2,
+            cv2.LINE_AA,
         )
 
     if roi_right is not None:
@@ -2967,63 +3330,44 @@ def annotate_result(
                 0,
             ),
             2,
+            cv2.LINE_AA,
         )
 
-    # --------------------------------------------------------
-    # Manual X axis.
-    # --------------------------------------------------------
-
-    axis_start = result.get(
-        "x_axis_start_px"
-    )
-
-    axis_end = result.get(
-        "x_axis_end_px"
-    )
-
-    baseline = result.get(
-        "baseline_y_px"
-    )
-
-    xmin = result.get(
-        "x_min_fl"
-    )
-
-    xmax = result.get(
-        "x_max_fl"
-    )
+    # ========================================================
+    # ACTUAL X AXIS
+    # ========================================================
 
     if (
         axis_start is not None
         and axis_end is not None
-        and baseline is not None
     ):
 
-        axis_start = int(
-            axis_start
+        y = int(
+            axis_y
+            if axis_y is not None
+            else (
+                baseline
+                if baseline is not None
+                else int(
+                    0.80 * h
+                )
+            )
         )
 
-        axis_end = int(
-            axis_end
-        )
-
-        axis_y = int(
-            baseline
-        )
-
-        # ----------------------------------------------------
-        # Main reconstructed axis.
-        # ----------------------------------------------------
-
+        # Main axis
         cv2.line(
             image,
             (
-                axis_start,
-                axis_y,
+                int(
+                    axis_start
+                ),
+                y,
             ),
             (
-                axis_end,
-                axis_y,
+                int(
+                    axis_end
+                ),
+                y,
             ),
             (
                 0,
@@ -3034,130 +3378,92 @@ def annotate_result(
             cv2.LINE_AA,
         )
 
-        # ----------------------------------------------------
-        # Endpoints.
-        # ----------------------------------------------------
-
-        cv2.circle(
+        # End markers -- short lines, NOT dots.
+        cv2.line(
             image,
             (
-                axis_start,
-                axis_y,
-            ),
-            6,
-            (
-                0,
-                255,
-                255,
-            ),
-            -1,
-            cv2.LINE_AA,
-        )
-
-        cv2.circle(
-            image,
-            (
-                axis_end,
-                axis_y,
-            ),
-            6,
-            (
-                0,
-                255,
-                255,
-            ),
-            -1,
-            cv2.LINE_AA,
-        )
-
-        # ----------------------------------------------------
-        # Endpoint labels.
-        # ----------------------------------------------------
-
-        cv2.putText(
-            image,
-            (
-                f"{xmin:g} fL"
-            ),
-            (
+                int(
+                    axis_start
+                ),
                 max(
-                    2,
-                    axis_start - 12,
+                    0,
+                    y - 8,
+                ),
+            ),
+            (
+                int(
+                    axis_start
                 ),
                 min(
-                    h - 5,
-                    axis_y + 27,
+                    h - 1,
+                    y + 8,
                 ),
             ),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.42,
             (
                 0,
-                160,
-                180,
+                220,
+                255,
             ),
-            1,
+            2,
             cv2.LINE_AA,
         )
 
-        cv2.putText(
+        cv2.line(
             image,
             (
-                f"{xmax:g} fL"
+                int(
+                    axis_end
+                ),
+                max(
+                    0,
+                    y - 8,
+                ),
             ),
             (
-                max(
-                    2,
-                    axis_end - 40,
+                int(
+                    axis_end
                 ),
                 min(
-                    h - 5,
-                    axis_y + 27,
+                    h - 1,
+                    y + 8,
                 ),
             ),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.42,
             (
                 0,
-                160,
-                180,
+                220,
+                255,
             ),
-            1,
+            2,
             cv2.LINE_AA,
         )
 
-        # ----------------------------------------------------
-        # Reconstructed major ticks.
-        #
-        # These are mathematical ticks, NOT detected ticks.
-        # ----------------------------------------------------
+        # ====================================================
+        # RECONSTRUCT TICKS MATHEMATICALLY
+        # ====================================================
 
-        tick_values = (
-            result.get(
-                "x_axis_reconstructed_ticks",
-                [],
-            )
+        ticks = result.get(
+            "x_axis_reconstructed_ticks",
+            [],
         )
 
         axis_range = (
-            xmax - xmin
+            xmax
+            - xmin
         )
 
         if axis_range > 0:
 
-            for value in tick_values:
+            for value in ticks:
 
-                normalized = (
-                    float(
-                        value
-                    )
+                ratio = (
+                    value
                     - xmin
                 ) / axis_range
 
                 px = int(
                     round(
                         axis_start
-                        + normalized
+                        + ratio
                         * (
                             axis_end
                             - axis_start
@@ -3165,15 +3471,16 @@ def annotate_result(
                     )
                 )
 
+                # Tick line
                 cv2.line(
                     image,
                     (
                         px,
-                        axis_y - 4,
+                        y - 4,
                     ),
                     (
                         px,
-                        axis_y + 10,
+                        y + 10,
                     ),
                     (
                         0,
@@ -3184,39 +3491,34 @@ def annotate_result(
                     cv2.LINE_AA,
                 )
 
-                # Do not label min/end twice.
-                if (
-                    value != xmin
-                    and value != xmax
-                ):
-
-                    cv2.putText(
-                        image,
-                        f"{value:g}",
-                        (
-                            max(
-                                1,
-                                px - 10,
-                            ),
-                            min(
-                                h - 4,
-                                axis_y + 27,
-                            ),
+                # Label
+                cv2.putText(
+                    image,
+                    f"{value:g}",
+                    (
+                        max(
+                            1,
+                            px - 10,
                         ),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.35,
-                        (
-                            0,
-                            150,
-                            180,
+                        min(
+                            h - 4,
+                            y + 28,
                         ),
-                        1,
-                        cv2.LINE_AA,
-                    )
+                    ),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.36,
+                    (
+                        0,
+                        150,
+                        180,
+                    ),
+                    1,
+                    cv2.LINE_AA,
+                )
 
-    # --------------------------------------------------------
-    # 50% line.
-    # --------------------------------------------------------
+    # ========================================================
+    # 50% HORIZONTAL LINE
+    # ========================================================
 
     y50 = result.get(
         "y50_px"
@@ -3257,17 +3559,17 @@ def annotate_result(
             cv2.LINE_AA,
         )
 
-        y50_fl = result.get(
+        y50_value = result.get(
             "y50_fl"
         )
 
-        if y50_fl is not None:
+        if y50_value is not None:
 
             cv2.putText(
                 image,
                 (
                     f"50% = "
-                    f"{y50_fl:.3f} fL"
+                    f"{y50_value:.3f} fL"
                 ),
                 (
                     max(
@@ -3277,7 +3579,7 @@ def annotate_result(
                         ) + 5,
                     ),
                     max(
-                        14,
+                        15,
                         y - 7,
                     ),
                 ),
@@ -3292,9 +3594,9 @@ def annotate_result(
                 cv2.LINE_AA,
             )
 
-    # --------------------------------------------------------
-    # Peak.
-    # --------------------------------------------------------
+    # ========================================================
+    # PEAK CROSSHAIR
+    # ========================================================
 
     peak_x = result.get(
         "peak_x_px"
@@ -3305,7 +3607,8 @@ def annotate_result(
     )
 
     if (
-        peak_x is not None
+        show_guides
+        and peak_x is not None
         and peak_y is not None
     ):
 
@@ -3321,131 +3624,219 @@ def annotate_result(
             )
         )
 
-        cv2.circle(
+        # Horizontal guide
+        cv2.line(
             image,
+            (
+                int(
+                    roi_left
+                ),
+                py,
+            ),
             (
                 px,
                 py,
             ),
-            7,
             (
                 255,
                 0,
                 255,
             ),
-            -1,
+            1,
             cv2.LINE_AA,
         )
 
-        peak_y_fl = result.get(
-            "peak_y_fl"
+        # Vertical guide
+        cv2.line(
+            image,
+            (
+                px,
+                py,
+            ),
+            (
+                px,
+                int(
+                    axis_y
+                    if axis_y is not None
+                    else baseline
+                ),
+            ),
+            (
+                255,
+                0,
+                255,
+            ),
+            2,
+            cv2.LINE_AA,
         )
 
-        if peak_y_fl is not None:
-
-            cv2.putText(
-                image,
-                (
-                    f"Peak Y: "
-                    f"{peak_y_fl:.3f} fL"
-                ),
-                (
+        cv2.putText(
+            image,
+            (
+                f"Peak "
+                f"X={result.get('peak_x_fl', 0):.3f} fL"
+                f"  Y={result.get('peak_y_fl', 0):.3f} fL"
+            ),
+            (
+                max(
+                    2,
                     min(
-                        w - 160,
+                        w - 210,
                         px + 8,
                     ),
-                    max(
-                        15,
-                        py - 8,
-                    ),
                 ),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.40,
-                (
-                    255,
-                    0,
-                    255,
+                max(
+                    15,
+                    py - 8,
                 ),
-                1,
-                cv2.LINE_AA,
-            )
+            ),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.40,
+            (
+                255,
+                0,
+                255,
+            ),
+            1,
+            cv2.LINE_AA,
+        )
 
-    # --------------------------------------------------------
-    # Genuine intersections.
-    # --------------------------------------------------------
+    # ========================================================
+    # INTERSECTION GUIDE LINES
+    # ========================================================
 
-    intersections_px = result.get(
-        "intersections_px",
-        [],
-    )
+    if (
+        show_guides
+        and y50 is not None
+    ):
 
-    intersections_fl = result.get(
-        "intersections_fl",
-        [],
-    )
+        intersection_pixels = result.get(
+            "intersections_px",
+            [],
+        )
 
-    if y50 is not None:
+        intersection_values = result.get(
+            "intersections_fl",
+            [],
+        )
 
-        y = int(
-            round(
-                y50
+        axis_bottom = int(
+            axis_y
+            if axis_y is not None
+            else (
+                baseline
+                if baseline is not None
+                else y50
             )
         )
 
-        for i, px_value in enumerate(
-            intersections_px
+        for index, intersection_x in enumerate(
+            intersection_pixels
         ):
 
             px = int(
                 round(
-                    px_value
+                    intersection_x
                 )
             )
 
-            cv2.circle(
+            # Vertical guide from 50% intersection
+            # down to the actual X-axis.
+            cv2.line(
                 image,
                 (
                     px,
-                    y,
+                    int(
+                        round(
+                            y50
+                        )
+                    ),
                 ),
-                7,
+                (
+                    px,
+                    axis_bottom,
+                ),
                 (
                     255,
                     0,
                     0,
                 ),
-                -1,
+                2,
+                cv2.LINE_AA,
+            )
+
+            # Small cross line at intersection.
+            cv2.line(
+                image,
+                (
+                    px - 7,
+                    int(
+                        round(
+                            y50
+                        )
+                    ),
+                ),
+                (
+                    px + 7,
+                    int(
+                        round(
+                            y50
+                        )
+                    ),
+                ),
+                (
+                    255,
+                    0,
+                    0,
+                ),
+                2,
                 cv2.LINE_AA,
             )
 
             if (
-                i
+                index
                 < len(
-                    intersections_fl
+                    intersection_values
                 )
             ):
 
+                value = (
+                    intersection_values[
+                        index
+                    ]
+                )
+
                 label_y = (
-                    y - 9
-                    if i % 2 == 0
-                    else y + 18
+                    int(
+                        round(
+                            y50
+                        )
+                    )
+                    - 10
+                    if index % 2 == 0
+                    else int(
+                        round(
+                            y50
+                        )
+                    )
+                    + 20
                 )
 
                 cv2.putText(
                     image,
                     (
-                        f"{intersections_fl[i]:.3f} fL"
+                        f"{value:.3f} fL"
                     ),
                     (
                         max(
-                            2,
+                            1,
                             min(
-                                w - 95,
-                                px - 32,
+                                w - 100,
+                                px - 35,
                             ),
                         ),
                         max(
-                            13,
+                            14,
                             min(
                                 h - 4,
                                 label_y,
@@ -3496,11 +3887,12 @@ def make_result_table(
         ),
 
         (
-            "ROI detection",
+            "ROI boundaries",
             (
                 f"{result.get('reference_left_px')}"
                 f"–"
-                f"{result.get('reference_right_px')} px"
+                f"{result.get('reference_right_px')}"
+                " px"
             ),
         ),
 
@@ -3512,12 +3904,22 @@ def make_result_table(
         ),
 
         (
-            "X-axis range",
+            "X-axis pixel range",
+            (
+                f"{result.get('x_axis_start_px')}"
+                f"–"
+                f"{result.get('x_axis_end_px')}"
+                " px"
+            ),
+        ),
+
+        (
+            "X-axis numerical range",
             (
                 f"{result.get('x_min_fl'):g}"
                 f"–"
                 f"{result.get('x_max_fl'):g}"
-                f" fL"
+                " fL"
             ),
         ),
 
@@ -3526,39 +3928,16 @@ def make_result_table(
             (
                 f"0–"
                 f"{result.get('y_max_fl'):g}"
-                f" fL"
+                " fL"
             ),
         ),
 
         (
-            "Manual X-axis start",
+            "Sensitivity",
             (
-                f"{result.get('x_axis_start_px')} px"
-                f" → "
-                f"{result.get('x_min_fl'):g} fL"
-            ),
-        ),
-
-        (
-            "Manual X-axis end",
-            (
-                f"{result.get('x_axis_end_px')} px"
-                f" → "
-                f"{result.get('x_max_fl'):g} fL"
-            ),
-        ),
-
-        (
-            "Pixels per fL",
-            (
-                f"{result.get('pixels_per_fl'):.3f}"
-            ),
-        ),
-
-        (
-            "Sensitivity threshold",
-            (
-                f"{result.get('segmentation_threshold'):.2f}"
+                f"{result.get('sensitivity')} "
+                f"(threshold "
+                f"{result.get('segmentation_threshold'):.2f})"
             ),
         ),
 
